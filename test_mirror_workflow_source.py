@@ -93,6 +93,13 @@ class WorkflowSource(unittest.TestCase):
         self.assertNotIn('git add -A', source)
         self.assertNotIn('git push origin', source)
 
+    def test_windows_powershell_51_preview_out_parameter_is_initialized(self):
+        source = CSharp.read_text(encoding="utf-8")
+        self.assertIn("WfGitPreview preview = null;", source)
+        self.assertIn("bool valid = cmd.Ok && ParseGitPreview(cmd.Text, operation, out preview);", source)
+        self.assertIn("WfGitPreview ready = preview;", source)
+        self.assertNotIn("WfGitPreview preview;\n        bool valid = cmd.Ok &&", source)
+
     def test_windows_powershell_51_thread_ctor_is_unambiguous(self):
         source = CSharp.read_text(encoding="utf-8")
         self.assertIn("Thread window = new Thread(new ThreadStart(delegate() {", source)

@@ -1104,7 +1104,9 @@ namespace FortisMirror {
       ThreadPool.QueueUserWorkItem(delegate {
         WfCommand cmd = DockerGitAction("--repo " + repoName + " --" +
           operation + "-preview", 70000, token);
-        WfGitPreview preview;
+        // Windows PowerShell 5.1 Add-Type uses an older C# definite-assignment
+        // analysis. Initialize before short-circuiting the out parameter.
+        WfGitPreview preview = null;
         bool valid = cmd.Ok && ParseGitPreview(cmd.Text, operation, out preview);
         if (!valid) preview = null;
         WfGitPreview ready = preview;
