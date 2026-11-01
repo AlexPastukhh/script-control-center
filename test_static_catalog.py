@@ -175,6 +175,21 @@ class RegistrationChecks(unittest.TestCase):
         self.assertNotIn('Process.GetProcessesByName(',source)
         self.assertNotIn('GetOwnerSid() == null',source)
 
+    def test_external_wmi_owner_lookup_includes_handle_key(self):
+        source=(ROOT/'ScriptCatalog.cs').read_text()
+        start=source.index('private static Dictionary<string,ExternalRun> ScanExternalRuns')
+        end=source.index('private void BeginExternalScan()',start)
+        block=source[start:end]
+        self.assertIn('SELECT Handle, ProcessId, Name, CommandLine FROM Win32_Process',block)
+        self.assertIn('item.InvokeMethod("GetOwnerSid",null,null)',block)
+        self.assertIn('owner["ReturnValue"]==null',block)
+        self.assertIn('Convert.ToUInt32(owner["ReturnValue"])!=0',block)
+        # Owner lookup must not be swallowed as a benign process-exit race.
+        owner=block.index('item.InvokeMethod("GetOwnerSid",null,null)')
+        race_try=block.index('try {',owner)
+        self.assertGreater(race_try,owner)
+        self.assertIn('catch(InvalidOperationException) { }',block[race_try:])
+
     def test_command_line_pinvoke_uses_exact_windows_api_entry_points(self):
         source=(ROOT/'ScriptCatalog.cs').read_text()
         self.assertIn('[DllImport("shell32.dll", CharSet=CharSet.Unicode, ExactSpelling=true, SetLastError=true)]\n    private static extern IntPtr CommandLineToArgvW',source)

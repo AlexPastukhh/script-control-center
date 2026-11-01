@@ -385,8 +385,11 @@ namespace FortisRdgControl {
       if(pathToIds.Count==0)return result;
       int ownSession=Process.GetCurrentProcess().SessionId;
       string ownSid=WindowsIdentity.GetCurrent().User.Value;
+      // GetOwnerSid needs the Win32_Process key property Handle in the
+      // projected WMI object. Omitting it makes InvokeMethod throw
+      // InvalidOperationException even though ProcessId/CommandLine are present.
       using(var search=new ManagementObjectSearcher(
-        "SELECT ProcessId, Name, CommandLine FROM Win32_Process WHERE Name = 'powershell.exe' OR Name = 'pwsh.exe'")) {
+        "SELECT Handle, ProcessId, Name, CommandLine FROM Win32_Process WHERE Name = 'powershell.exe' OR Name = 'pwsh.exe'")) {
         foreach(ManagementObject item in search.Get()) {
           using(item) {
             object value=item["CommandLine"];
@@ -396,14 +399,17 @@ namespace FortisRdgControl {
             if(!pathToIds.TryGetValue(filename,out ids))continue;
             int processId=Convert.ToInt32(item["ProcessId"]);
             if(processId==Process.GetCurrentProcess().Id)continue;
+            // Owner lookup is a required security check. Keep it outside the
+            // process-exit race handler so WMI failures invalidate the scan
+            // instead of silently turning a running process into "stopped".
+            using(ManagementBaseObject owner=item.InvokeMethod("GetOwnerSid",null,null)) {
+              if(owner==null || owner["Sid"]==null || owner["ReturnValue"]==null ||
+                 Convert.ToUInt32(owner["ReturnValue"])!=0)
+                throw new UnauthorizedAccessException("Cannot verify external process owner");
+              if(!String.Equals(Convert.ToString(owner["Sid"]),
+                ownSid,StringComparison.OrdinalIgnoreCase))continue;
+            }
             try {
-              // Same Windows user and logon session only.
-              using(ManagementBaseObject owner=item.InvokeMethod("GetOwnerSid",null,null)) {
-                if(owner==null || owner["Sid"]==null)
-                  throw new UnauthorizedAccessException("Cannot verify external process owner");
-                if(!String.Equals(Convert.ToString(owner["Sid"]),
-                  ownSid,StringComparison.OrdinalIgnoreCase))continue;
-              }
               using(var proc=Process.GetProcessById(processId)) {
                 if(proc.HasExited || proc.SessionId!=ownSession)continue;
                 DateTime started=proc.StartTime;
