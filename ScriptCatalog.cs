@@ -696,21 +696,48 @@ namespace FortisRdgControl {
     private string BundleDependencyReport(BundleDefinition item) {
       string local=Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
       string user=Environment.GetEnvironmentVariable("USERPROFILE")??"";
+      string tunnelCurrent=System.IO.Path.Combine(user,"Repos","tunnel","runtime","windows-repo","current");
       var required=new List<string>();
+      required.Add(System.IO.Path.Combine(launcherRoot,"Get-TunnelWindowsMirror.ps1"));
+      required.Add(System.IO.Path.Combine(tunnelCurrent,"source-manifest.json"));
+      string runtime=System.IO.Path.Combine(@"C:\Tools","tunnel-client","runtime","v0.0.15","tunnel-client-runtime.exe");
+      string client=System.IO.Path.Combine(@"C:\Tools","tunnel-client","tunnel-client.exe");
       if(item.Id=="fortis-rdg.repo2") {
-        required.Add(System.IO.Path.Combine(local,"FortisRDGLauncherV2","Start-Fortis.ps1"));
-        required.Add(System.IO.Path.Combine(local,"FortisRepoPlus2","FortisRepo2-quiet-logs.ps1"));
+        required.Add(System.IO.Path.Combine(tunnelCurrent,"Repo2-Worker.ps1"));
+        required.Add(System.IO.Path.Combine(tunnelCurrent,"launchers","FortisRDGLauncherV2","Start-Fortis.ps1"));
+        required.Add(System.IO.Path.Combine(tunnelCurrent,"launchers","FortisRDGLauncherV2","Common.ps1"));
+        required.Add(System.IO.Path.Combine(tunnelCurrent,"launchers","FortisRepoPlus2","Repo2DirectGuard.ps1"));
+        required.Add(System.IO.Path.Combine(tunnelCurrent,"launchers","FortisRepoPlus2","FortisRepo2-quiet-logs.ps1"));
+        required.Add(client);
+        required.Add(runtime);
+        required.Add(System.IO.Path.Combine(local,"FortisRepoPlus2","secrets","runtime.key"));
       } else if(item.Id=="fortis-rdg.repo1") {
-        required.Add(System.IO.Path.Combine(user,"chatgpt-repo-mode","run-tunnel-quiet-logs.ps1"));
+        required.Add(System.IO.Path.Combine(tunnelCurrent,"Repo1-Worker.ps1"));
+        required.Add(System.IO.Path.Combine(tunnelCurrent,"launchers","chatgpt-repo-mode","run-tunnel-quiet-logs.ps1"));
+        required.Add(System.IO.Path.Combine(tunnelCurrent,"launchers","chatgpt-repo-mode","control.ps1"));
+        required.Add(runtime);
+        required.Add(System.IO.Path.Combine(user,"chatgpt-repo-mode","workspace-config.json"));
       } else if(item.Id=="fortis-rdg.updater") {
-        required.Add(System.IO.Path.Combine(local,"FortisRDGLauncherV2","Start-Fortis.ps1"));
+        required.Add(System.IO.Path.Combine(tunnelCurrent,"launchers","FortisRDGLauncherV2","Start-Fortis.ps1"));
+        required.Add(System.IO.Path.Combine(tunnelCurrent,"launchers","FortisRDGLauncherV2","Common.ps1"));
+        required.Add(client);
+        required.Add(runtime);
         required.Add(System.IO.Path.Combine(local,"RDG-Server","cicd-bootstrap-ci-20261029t051843803595-4546c7d69e","files","RDG-CICD-Bootstrap","Update-RDG.ps1"));
       } else {
-        required.Add(System.IO.Path.Combine(local,"FortisRDGLauncherV2","Common.ps1"));
+        required.Add(System.IO.Path.Combine(tunnelCurrent,"launchers","FortisRDGLauncherV2","Common.ps1"));
+        required.Add(System.IO.Path.Combine(tunnelCurrent,"launchers","FortisRepoPlus2","Repo2DirectGuard.ps1"));
+        required.Add(client);
+        required.Add(runtime);
       }
       var report=new StringBuilder();
-      foreach(string path in required) report.AppendLine((File.Exists(path)?"  OK  ":"  НЕТ  ")+path);
-      if(item.Id=="fortis-rdg.repo1") report.AppendLine("  Требует предварительно запущенный Fortis Repo 2.");
+      foreach(string path in required) report.AppendLine((File.Exists(path)||Directory.Exists(path)?"  OK  ":"  НЕТ  ")+path);
+      if(item.Id=="fortis-rdg.repo2") {
+        string profileDir=System.IO.Path.Combine(local,"FortisRepoPlus2","profiles");
+        int profileCount=(File.Exists(System.IO.Path.Combine(profileDir,"repo-mode-plus2.yaml"))?1:0)+
+          (File.Exists(System.IO.Path.Combine(profileDir,"repo-mode-plus2.yml"))?1:0);
+        report.AppendLine((profileCount==1?"  OK  ":"  НЕТ  ")+"Exactly one repo-mode-plus2.yaml/.yml profile in "+profileDir);
+      }
+      report.AppendLine("  Источник проверяется при запуске: clean main + manifest SHA-256 + восемь файлов.");
       if(item.Id=="fortis-rdg.updater") report.AppendLine("  Docker, контейнер fortis-repo-test и RDG healthz проверяются только при запуске.");
       if(item.Id=="fortis-rdg.watcher.start" || item.Id=="fortis-rdg.watcher.stop") report.AppendLine("  Docker и контейнер fortis-repo-test проверяются только при запуске.");
       return report.ToString();

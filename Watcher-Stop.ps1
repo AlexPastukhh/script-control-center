@@ -1,8 +1,11 @@
-﻿# Exact PID matching, copied in purpose from the established v2 Stop-Watcher script.
-# No interactive prompt here: the GUI requests confirmation first.
+﻿# Exact PID matching; only the CI watcher is stopped, never Fortis or a tunnel.
 $ErrorActionPreference = 'Stop'
 try {
-    $common = Join-Path $PSScriptRoot 'launchers\FortisRDGLauncherV2\Common.ps1'
+    $resolver = Join-Path $PSScriptRoot 'Get-TunnelWindowsMirror.ps1'
+    if (-not (Test-Path -LiteralPath $resolver -PathType Leaf)) { throw "Не найден $resolver" }
+    . $resolver
+    $mirror = Get-FortisTunnelWindowsMirror -ScriptCenterRoot $PSScriptRoot
+    $common = Join-Path $mirror.Root 'launchers\FortisRDGLauncherV2\Common.ps1'
     if (-not (Test-Path -LiteralPath $common -PathType Leaf)) { throw "Не найден $common" }
     . $common
     Assert-Docker

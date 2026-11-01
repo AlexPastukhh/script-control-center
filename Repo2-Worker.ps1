@@ -1,43 +1,16 @@
-﻿# Repo 2: do not bypass the pinned SHA-256, Guard or identity checks.
+﻿# Script Center adapter: delegate to the byte-pinned Repo 2 worker in the Windows tunnel clone.
 $ErrorActionPreference = 'Stop'
-$readyMarker = $null
-$markerTemp = $null
-$exitCode = 0
 try {
-    $prepare = Join-Path $PSScriptRoot 'launchers\FortisRDGLauncherV2\Start-Fortis.ps1'
-    $repo2 = Join-Path $PSScriptRoot 'launchers\FortisRepoPlus2\FortisRepo2-quiet-logs.ps1'
-    if (-not (Test-Path -LiteralPath $prepare -PathType Leaf)) { throw "Не найден $prepare" }
-    if (-not (Test-Path -LiteralPath $repo2 -PathType Leaf)) { throw "Не найден $repo2" }
-    & $prepare
-    if (-not $?) { throw 'Подготовка Fortis Guard завершилась неуспешно.' }
-
-    # Publish a PID + process-start marker while this worker owns the Repo 2 session.
-    $runDir = Join-Path $env:LOCALAPPDATA 'FortisRdgControlCenter\scripts\runs'
-    New-Item -ItemType Directory -Path $runDir -Force | Out-Null
-    $workerProcess = Get-Process -Id $PID -ErrorAction Stop
-    $readyMarker = Join-Path $runDir ('repo2-worker-{0}.xml' -f $PID)
-    $markerDoc = New-Object System.Xml.XmlDocument
-    $markerRoot = $markerDoc.CreateElement('Repo2Worker')
-    $markerRoot.SetAttribute('pid', [string]$PID)
-    $markerRoot.SetAttribute('start', [string]$workerProcess.StartTime.ToBinary())
-    [void]$markerDoc.AppendChild($markerRoot)
-    $markerTemp = $readyMarker + '.tmp'
-    $markerDoc.Save($markerTemp)
-    Move-Item -LiteralPath $markerTemp -Destination $readyMarker -Force
-    $markerTemp = $null
-
-    Write-Output 'Запуск Fortis Repo 2 (оригинальный quiet-logs скрипт)...'
-    & $repo2 -Action Start
+    $resolver = Join-Path $PSScriptRoot 'Get-TunnelWindowsMirror.ps1'
+    if (-not (Test-Path -LiteralPath $resolver -PathType Leaf)) { throw "Не найден $resolver" }
+    . $resolver
+    $mirror = Get-FortisTunnelWindowsMirror -ScriptCenterRoot $PSScriptRoot
+    $worker = Join-Path $mirror.Root 'Repo2-Worker.ps1'
+    if (-not (Test-Path -LiteralPath $worker -PathType Leaf)) { throw "Не найден $worker" }
+    Write-Output ('Запуск Fortis Repo 2 из Windows-клона tunnel; source=' + $mirror.SourceRevision)
+    & $worker
     if (-not $?) { throw 'Fortis Repo 2 завершился с ошибкой.' }
 } catch {
     [Console]::Error.WriteLine('REPO2 ERROR: ' + $_.Exception.Message)
-    $exitCode = 1
-} finally {
-    if ($markerTemp -and (Test-Path -LiteralPath $markerTemp)) {
-        Remove-Item -LiteralPath $markerTemp -Force -ErrorAction SilentlyContinue
-    }
-    if ($readyMarker -and (Test-Path -LiteralPath $readyMarker)) {
-        Remove-Item -LiteralPath $readyMarker -Force -ErrorAction SilentlyContinue
-    }
+    exit 1
 }
-exit $exitCode

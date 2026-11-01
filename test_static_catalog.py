@@ -6,7 +6,7 @@ class RegistrationChecks(unittest.TestCase):
     def test_existing_four_entries_unchanged(self):
         source=(ROOT/'ControlCenter.cs').read_text(encoding='utf-8-sig')
         self.assertIn('private readonly string[] keys = { "repo2", "repo1", "updater", "watcher" };',source)
-        for name in ('Repo2-Worker.ps1','Repo1-Worker.ps1','Updater-Worker.ps1','Watcher-Start.ps1','Watcher-Stop.ps1'):
+        for name in ('Get-TunnelWindowsMirror.ps1','Repo2-Worker.ps1','Repo1-Worker.ps1','Updater-Worker.ps1','Watcher-Start.ps1','Watcher-Stop.ps1'):
             self.assertTrue((ROOT/name).exists())
     def test_registration_ui_and_local_storage(self):
         source=(ROOT/'ScriptCatalog.cs').read_text()
@@ -21,7 +21,7 @@ class RegistrationChecks(unittest.TestCase):
             self.assertIn(text,source)
         self.assertNotIn('docker.exe',source)
     def test_powershell_sources_keep_bom(self):
-        for name in ('Start-ControlCenter.ps1','Start-ScriptCatalog.ps1','Test-Compile.ps1','Test-ScriptCatalogCompile.ps1','Script-Runner.ps1'):
+        for name in ('Start-ControlCenter.ps1','Start-ScriptCatalog.ps1','Test-Compile.ps1','Test-ScriptCatalogCompile.ps1','Script-Runner.ps1','Get-TunnelWindowsMirror.ps1'):
             self.assertTrue((ROOT/name).read_bytes().startswith(b'\xef\xbb\xbf'))
     def test_project_compile_uses_both_cs_files(self):
         for name in ('Start-ControlCenter.ps1','Test-Compile.ps1'):
@@ -106,14 +106,43 @@ class RegistrationChecks(unittest.TestCase):
     def test_batch_command_uses_cmd_compatible_quoting(self):
         source=(ROOT/'ScriptCatalog.cs').read_text()
         self.assertIn('/d /s /c',source)
-    def test_repo1_worker_delegates_independently_to_pinned_launcher(self):
+    def test_tunnel_mirror_resolver_pins_the_sibling_windows_clone(self):
+        source=(ROOT/'Get-TunnelWindowsMirror.ps1').read_text(encoding='utf-8-sig')
+        for marker in ("Repos\\script-control-center","Join-Path $reposRoot 'tunnel'",
+                       'remote get-url origin','AlexPastukhh/tunnel','AlexPastukhh/script-control-center','scriptCenterDirty','branch --show-current',
+                       'status --porcelain --untracked-files=normal','rev-list --left-right --count',
+                       'D47234936171E7E47B870533AB06452BFA13E0DAA30F90ABB1367C4B66EC91E0',
+                       'Get-FileHash','Repo1-Worker.ps1','Repo2-Worker.ps1',
+                       'FortisRepo2-quiet-logs.ps1'):
+            self.assertIn(marker,source)
+        self.assertNotIn(r'C:\Users\alexa',source)
+
+    def test_repo1_worker_delegates_to_verified_tunnel_mirror(self):
         source=(ROOT/'Repo1-Worker.ps1').read_text(encoding='utf-8-sig')
-        self.assertIn('run-tunnel-quiet-logs.ps1',source)
-        self.assertIn('& $script -Mode Run',source)
-        self.assertIn('Test-Path -LiteralPath $script -PathType Leaf',source)
-        self.assertNotIn('repo2-worker-*.xml',source)
-        self.assertNotIn('Get-WmiObject -Class Win32_Process',source)
-        self.assertNotIn('Сначала запустите Repo 2',source)
+        self.assertIn('Get-TunnelWindowsMirror.ps1',source)
+        self.assertIn('Get-FortisTunnelWindowsMirror',source)
+        self.assertIn("Join-Path $mirror.Root 'Repo1-Worker.ps1'",source)
+        self.assertIn('& $worker',source)
+        self.assertNotIn('launchers' + chr(92),source)
+
+    def test_repo2_worker_delegates_to_verified_tunnel_mirror(self):
+        source=(ROOT/'Repo2-Worker.ps1').read_text(encoding='utf-8-sig')
+        self.assertIn('Get-TunnelWindowsMirror.ps1',source)
+        self.assertIn('Get-FortisTunnelWindowsMirror',source)
+        self.assertIn("Join-Path $mirror.Root 'Repo2-Worker.ps1'",source)
+        self.assertIn('& $worker',source)
+        self.assertNotIn('launchers' + chr(92),source)
+
+    def test_shared_fortis_workers_resolve_code_from_tunnel_mirror(self):
+        for filename, dependency in (('Updater-Worker.ps1','Start-Fortis.ps1'),
+                                     ('Watcher-Start.ps1','Common.ps1'),
+                                     ('Watcher-Stop.ps1','Common.ps1')):
+            source=(ROOT/filename).read_text(encoding='utf-8-sig')
+            self.assertIn('Get-TunnelWindowsMirror.ps1',source)
+            self.assertIn('Get-FortisTunnelWindowsMirror',source)
+            self.assertIn(dependency,source)
+            self.assertIn('$mirror.Root',source)
+            self.assertNotIn("Join-Path $PSScriptRoot 'launchers" + chr(92),source)
     def test_main_control_center_has_independent_repo_lifecycles(self):
         source=(ROOT/'ControlCenter.cs').read_text(encoding='utf-8-sig')
         start=source[source.index('private void StartService('):source.index('private void StopService(')]
@@ -125,13 +154,12 @@ class RegistrationChecks(unittest.TestCase):
         self.assertNotIn('id == "repo2" && (OwnedActive("repo1")',stop)
         self.assertIn('StartProcess(id, psExe',start)
         self.assertIn('taskkill.exe',stop)
-    def test_repo2_worker_publishes_a_process_identity_marker(self):
+    def test_repo2_adapter_does_not_duplicate_the_tunnel_worker(self):
         source=(ROOT/'Repo2-Worker.ps1').read_text(encoding='utf-8-sig')
-        self.assertIn('repo2-worker-{0}.xml',source)
-        self.assertIn('$workerProcess.StartTime.ToBinary()',source)
-        self.assertIn('Move-Item -LiteralPath $markerTemp -Destination $readyMarker',source)
-        self.assertIn('Remove-Item -LiteralPath $readyMarker',source)
-        self.assertIn('& $repo2 -Action Start',source)
+        self.assertIn("Join-Path $mirror.Root 'Repo2-Worker.ps1'",source)
+        self.assertIn('& $worker',source)
+        self.assertNotIn('repo2-worker-{0}.xml',source)
+        self.assertNotIn('FortisRepo2-quiet-logs.ps1',source)
     def test_runner_terminates_owned_process_tree(self):
         source=(ROOT/'Script-Runner.ps1').read_text(encoding='utf-8-sig')
         self.assertIn('private static void KillTree(Process child)',source)
@@ -243,13 +271,19 @@ class RegistrationChecks(unittest.TestCase):
         self.assertIn('SetAttr(xml,n,"bundle",e.BundleId)',source)
         self.assertIn('FindBundleEntry(item.Id,path)',source)
         self.assertIn('BundleId=item.Id',source)
-    def test_bundle_import_preflights_known_external_paths(self):
+    def test_bundle_import_preflights_tunnel_mirror_and_local_runtime_paths(self):
         source=(ROOT/'ScriptCatalog.cs').read_text()
-        for part in ('FortisRDGLauncherV2','Start-Fortis.ps1','FortisRepoPlus2','FortisRepo2-quiet-logs.ps1',
-                     'chatgpt-repo-mode','run-tunnel-quiet-logs.ps1','RDG-Server','Update-RDG.ps1','Common.ps1'):
-            self.assertIn(part,source)
-        self.assertIn('File.Exists(path)',source)
-        self.assertIn('Проверка внешних файлов выше',source)
+        block=source[source.index('private string BundleDependencyReport('):source.index('private void ImportBuiltInBundle()')]
+        for part in ('Get-TunnelWindowsMirror.ps1','Repos','tunnel','windows-repo','source-manifest.json',
+                     'Repo1-Worker.ps1','Repo2-Worker.ps1','FortisRDGLauncherV2','Start-Fortis.ps1',
+                     'FortisRepoPlus2','FortisRepo2-quiet-logs.ps1','chatgpt-repo-mode',
+                     'run-tunnel-quiet-logs.ps1','RDG-Server','Update-RDG.ps1','Common.ps1',
+                     r'C:\Tools','runtime.key','repo-mode-plus2.yaml','repo-mode-plus2.yml','profileCount==1'):
+            self.assertIn(part,block)
+        self.assertIn('File.Exists(path)||Directory.Exists(path)',block)
+        self.assertIn('manifest SHA-256 + восемь файлов',block)
+        self.assertNotIn('Environment.SpecialFolder.LocalApplicationData),"FortisRDGLauncherV2"',block)
+        self.assertNotIn('Требует предварительно запущенный Fortis Repo 2',block)
     def test_bundle_import_never_starts_scripts_or_services(self):
         source=(ROOT/'ScriptCatalog.cs').read_text()
         start=source.index('private void ImportBuiltInBundle()')

@@ -1,12 +1,16 @@
 ﻿# RDG deployment watcher; never deploy from a stale ready.json at startup.
-# No Docker containers or RDG credentials are changed by this preflight.
+# Shared Fortis preparation source is resolved from the sibling Windows tunnel clone.
 $ErrorActionPreference = 'Stop'
 try {
-    $prepare = Join-Path $PSScriptRoot 'launchers\FortisRDGLauncherV2\Start-Fortis.ps1'
+    $resolver = Join-Path $PSScriptRoot 'Get-TunnelWindowsMirror.ps1'
+    if (-not (Test-Path -LiteralPath $resolver -PathType Leaf)) { throw "Не найден $resolver" }
+    . $resolver
+    $mirror = Get-FortisTunnelWindowsMirror -ScriptCenterRoot $PSScriptRoot
+    $prepare = Join-Path $mirror.Root 'launchers\FortisRDGLauncherV2\Start-Fortis.ps1'
     $updater = Join-Path $env:LOCALAPPDATA `
       'RDG-Server\cicd-bootstrap-ci-20261029t051843803595-4546c7d69e\files\RDG-CICD-Bootstrap\Update-RDG.ps1'
     if (-not (Test-Path -LiteralPath $prepare -PathType Leaf)) { throw "Не найден $prepare" }
-    if (-not (Test-Path -LiteralPath $updater -PathType Leaf)) { throw "Не найден $updater" }
+    if (-not (Test-Path -LiteralPath $updater -PathType Leaf)) { throw "Не найден установленный RDG updater: $updater" }
     & $prepare
     if (-not $?) { throw 'Подготовка Fortis не удалась.' }
     $id = @(& docker.exe inspect --type container --format '{{.Id}}' fortis-repo-test)

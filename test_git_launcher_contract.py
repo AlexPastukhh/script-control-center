@@ -36,19 +36,24 @@ class GitLauncherContract(unittest.TestCase):
                 self.assertIn(b'-lt 256', s)
                 self.assertIn(b'-gt 1024', s)
 
-    def test_worker_sources_inside_repository(self):
-        for worker, launcher in {
-            'Repo1-Worker.ps1': b'launchers\\chatgpt-repo-mode\\run-tunnel-quiet-logs.ps1',
-            'Repo2-Worker.ps1': b'launchers\\FortisRepoPlus2\\FortisRepo2-quiet-logs.ps1',
-            'Updater-Worker.ps1': b'launchers\\FortisRDGLauncherV2\\Start-Fortis.ps1',
-            'Watcher-Start.ps1': b'launchers\\FortisRDGLauncherV2\\Common.ps1',
-            'Watcher-Stop.ps1': b'launchers\\FortisRDGLauncherV2\\Common.ps1',
-        }.items():
+    def test_worker_adapters_resolve_only_the_sibling_tunnel_clone(self):
+        helper = content('Get-TunnelWindowsMirror.ps1')
+        for marker in (b'Repos\\script-control-center', b"Join-Path $reposRoot 'tunnel'",
+                       b'AlexPastukhh/tunnel', b'AlexPastukhh/script-control-center', b'scriptCenterDirty', b'branch --show-current',
+                       b'status --porcelain --untracked-files=normal', b'rev-list --left-right --count', b'D47234936171E7E47B870533AB06452BFA13E0DAA30F90ABB1367C4B66EC91E0',
+                       b'Get-FileHash'):
+            self.assertIn(marker, helper)
+        for worker in ('Repo1-Worker.ps1','Repo2-Worker.ps1','Updater-Worker.ps1',
+                       'Watcher-Start.ps1','Watcher-Stop.ps1'):
             with self.subTest(worker=worker):
                 b = content(worker)
-                self.assertIn(launcher, b)
-                self.assertIn(b'$PSScriptRoot', b)
-        self.assertIn(b'launchers\\FortisRDGLauncherV2\\Start-Fortis.ps1', content('Repo2-Worker.ps1'))
+                self.assertIn(b'Get-TunnelWindowsMirror.ps1', b)
+                self.assertIn(b'Get-FortisTunnelWindowsMirror', b)
+                self.assertIn(b'$mirror.Root', b)
+        self.assertIn(b"Join-Path $mirror.Root 'Repo1-Worker.ps1'", content('Repo1-Worker.ps1'))
+        self.assertIn(b"Join-Path $mirror.Root 'Repo2-Worker.ps1'", content('Repo2-Worker.ps1'))
+        self.assertIn(b"Join-Path $mirror.Root 'launchers\\FortisRDGLauncherV2\\Start-Fortis.ps1'", content('Updater-Worker.ps1'))
+        self.assertIn(b"Join-Path $mirror.Root 'launchers\\FortisRDGLauncherV2\\Common.ps1'", content('Watcher-Start.ps1'))
         self.assertIn(b"$script:GuardPath = Join-Path $PSScriptRoot '..\\FortisRepoPlus2\\Repo2DirectGuard.ps1'", content('launchers/FortisRDGLauncherV2/Common.ps1'))
 
     def test_repo1_control_pin(self):
@@ -59,6 +64,16 @@ class GitLauncherContract(unittest.TestCase):
             b = content('launchers/chatgpt-repo-mode/' + file)
             self.assertIn(digest, b)
             self.assertIn(b"$fortisControl = Join-Path $PSScriptRoot 'control.ps1'", b)
+
+    def test_paired_windows_update_pulls_both_repositories_in_order(self):
+        updater = content('tools/Update-Windows-ControlCenter.ps1')
+        self.assertIn(b'TunnelRepoPath', updater)
+        self.assertIn(b'Pulling Tunnel main first', updater)
+        self.assertIn(b'Pulling Script Center main', updater)
+        self.assertLess(updater.index(b'Pulling Tunnel main first'), updater.index(b'Pulling Script Center main'))
+        self.assertIn(b'Get-FortisTunnelWindowsMirror', updater)
+        for forbidden in (b'Stop-Process', b'Stop-Service', b'docker stop', b'docker start', b'reset --hard', b'git clean'):
+            self.assertNotIn(forbidden, updater)
 
     def test_primary_desktop_shortcut_is_standalone_catalog(self):
         updater = content('tools/Update-Windows-ControlCenter.ps1')

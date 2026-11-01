@@ -1,8 +1,12 @@
-﻿# Start Docker CI watcher without relying on the old Start-Watcher.ps1 shortcut script,
-# which may have been modified to run an interactive `docker exec -it tail -f`.
+﻿# Start Docker CI watcher without relying on the old Start-Watcher.ps1 shortcut script.
+# Shared Fortis code is resolved from the sibling Windows tunnel clone.
 $ErrorActionPreference = 'Stop'
 try {
-    $common = Join-Path $PSScriptRoot 'launchers\FortisRDGLauncherV2\Common.ps1'
+    $resolver = Join-Path $PSScriptRoot 'Get-TunnelWindowsMirror.ps1'
+    if (-not (Test-Path -LiteralPath $resolver -PathType Leaf)) { throw "Не найден $resolver" }
+    . $resolver
+    $mirror = Get-FortisTunnelWindowsMirror -ScriptCenterRoot $PSScriptRoot
+    $common = Join-Path $mirror.Root 'launchers\FortisRDGLauncherV2\Common.ps1'
     if (-not (Test-Path -LiteralPath $common -PathType Leaf)) { throw "Не найден $common" }
     . $common
     $id = Ensure-Fortis
