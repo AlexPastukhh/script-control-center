@@ -192,6 +192,14 @@ class RegistrationChecks(unittest.TestCase):
         self.assertIn('KillProcessTree(pid[e.Id])',stop)
         self.assertIn('File.WriteAllText(marker,"stop"',stop)
 
+    def test_catalog_does_not_ambiguously_bind_winforms_timer(self):
+        source=(ROOT/'ScriptCatalog.cs').read_text()
+        self.assertIn('private readonly System.Windows.Forms.Timer tick = new System.Windows.Forms.Timer();', source)
+        self.assertNotIn('private readonly Timer tick = new Timer();', source)
+        # ObjectDisposedException derives from InvalidOperationException in .NET.
+        # A separate later catch(ObjectDisposedException) is unreachable (CS0160).
+        self.assertNotIn('catch(InvalidOperationException) { }\n        catch(ObjectDisposedException)', source)
+
     def test_windows_catalog_compilers_reference_management(self):
         for name in ('Start-ScriptCatalog.ps1','Test-ScriptCatalogCompile.ps1',
                      'Test-CatalogOnly.ps1'):

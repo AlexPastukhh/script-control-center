@@ -30,7 +30,7 @@ namespace FortisRdgControl {
     private readonly Label logHeader = new Label();
     private readonly Label footer = new Label();
     private readonly Label emptyState = new Label();
-    private readonly Timer tick = new Timer();
+    private readonly System.Windows.Forms.Timer tick = new System.Windows.Forms.Timer();
     private readonly Dictionary<string, Process> owned = new Dictionary<string, Process>();
     private readonly Dictionary<string, DateTime> launched = new Dictionary<string, DateTime>();
     private readonly Dictionary<string, int> pid = new Dictionary<string, int>();
@@ -446,8 +446,7 @@ namespace FortisRdgControl {
             if(found!=null) foreach(var pair in found) externalRuns[pair.Key]=pair.Value;
             RefreshStatuses();
           });
-        } catch(InvalidOperationException) { }
-        catch(ObjectDisposedException) { }
+        } catch(InvalidOperationException) { } // Also covers ObjectDisposedException.
       });
     }
 
