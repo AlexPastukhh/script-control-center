@@ -6,8 +6,8 @@ ROOT = Path(__file__).resolve().parent
 class MirrorInspectorSourceChecks(unittest.TestCase):
     def test_launcher_opens_gui_by_default_and_preserves_cli(self):
         text = (ROOT / 'Fortis-Windows-Mirror-Status.ps1').read_text(encoding='utf-8-sig')
-        self.assertIn('Mirror-Status.UI.cs', text)
-        self.assertIn('[FortisMirror.MirrorWindow]::Open(', text)
+        self.assertIn('Mirror-Workflow.UI.cs', text)
+        self.assertIn('[FortisMirror.WorkflowWindow]::Open(', text)
         self.assertIn('if ($Cli)', text)
         self.assertIn('Mirror-Status.Report.ps1', text)
         self.assertTrue((ROOT / 'Fortis-Windows-Mirror-Status.ps1').read_bytes().startswith(b'\xef\xbb\xbf'))

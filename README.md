@@ -101,97 +101,102 @@ PID по полной командной строке без дополните�
 powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File .\Test-ScriptCatalogCompile.ps1
 ```
 
-## Windows Git mirror inspector (checks + explicit selected pull)
+## Docker → GitHub → Windows: branch-aware workflow inspector (new default)
 
-The already-registerable `Fortis-Windows-Mirror-Status.ps1` now opens its own Windows Forms window when launched from the standalone Script Catalog. It immediately lists folders and Git clones under `%USERPROFILE%\Repos` (or an explicit `-MirrorRoot`), and provides **Проверить выбранные**, **Проверить все**, **Pull выбранного**, **Обновить список**, and **Отмена проверки**. You can select one or several folders using **Ctrl+click** / **Shift+click**; **Проверить выбранные** checks only selected Git clones (ignoring non-Git directories). Multi-selection never enables Pull: **Pull выбранного** remains limited to one individually checked, clean, behind-only clone and requires confirmation. Network checks run on a background worker with bounded waits, so the window remains usable. A non-Git directory is listed as such and is never queried.
+The primary `Fortis-Windows-Mirror-Status.ps1` GUI now loads
+`Mirror-Workflow.UI.cs`. The original main-only `Mirror-Status.UI.cs` is retained
+as historical/source reference, and `-Cli` still runs the old text-only
+`Mirror-Status.Report.ps1` (main-only). The new UI is **Windows PowerShell 5.1 / WinForms**,
+not JavaScript. It uses the Docker-first read-only exporter
+`tools/Export-Docker-Branch-Workflow.py` inside `fortis-repo-test`; keep that
+exporter in the Docker Git checkout. **Nothing was deployed to Windows by
+editing the Docker source.**
 
-Keep **all three files together** after a normal Windows `git pull --ff-only origin main`: `Fortis-Windows-Mirror-Status.ps1` (existing registration/GUI entry point), `Mirror-Status.UI.cs` (GUI source), and `Mirror-Status.Report.ps1` (original text report). The catalog entry already pointing to the first file does **not** need to be recreated. Run with no arguments to open the GUI; use `-Cli` for the previous console report (`-Cli -Notify` for its optional notification).
+**Source of truth and screen:** the table enumerates Git repositories under
+Docker `/workspace/repo/Repos/` (not Windows folders), one row per repository.
+If Docker is unavailable, it shows an error instead of a misleading empty list.
+Windows clone is expected under `%USERPROFILE%\Repos\<docker-folder-name>`;
+missing clones remain visible as `НЕТ КЛОНА WINDOWS`. Windows-only folders are
+not added. The UI shows a compact toolbar on top, a full-width ListView with
+13 columns separated by `Docker · ...`, `Windows · ...`, and `Workflow · ...`,
+then a multiline scrollable full-detail panel **below** the table. Every table
+column is represented as an untruncated detail line in the identical order.
+Both `Другие ветки Docker` and `Другие ветки Windows` show the same 13 full
+fields for each other branch after the selected branch's primary details.
 
-**Check** buttons first use read-only Git commands (`rev-parse`, `symbolic-ref`, `status`, `log`, `remote get-url`, `ls-remote`). For exact **Отстаёт на** counts, if the remote commit objects are not locally cached, a user-requested Check additionally runs `git fetch --no-tags --no-recurse-submodules origin main` with the verified HTTPS OpenSSL override. That writes **Git metadata only** (objects, FETCH_HEAD and possibly the remote-tracking ref), never changes the Windows working files, local `main`, running programs or external services. A failed history retrieval or shallow clone shows an unknown count, never an invented zero; shallow clones require a separate owner-controlled full-history recovery before exact counting. A locally-ahead or diverged history is flagged as a separate exception and disables Pull; ordinary behind counts come from `git rev-list --left-right --count <local>...<remote>`. There is no automatic check on window opening, no unattended worktree update and no bulk pull. The details pane shows the selected repository path, full local `main` SHA, date/subject of its last local commit and full remote `main` SHA. The remote commit *subject* cannot reliably be obtained by `ls-remote` alone before fetching; after a successful pull it becomes available locally. The explicit **Pull выбранного** action is enabled only when the remote SHA differs, the selected clone is clean, the current branch is `main`, and the GitHub origin has passed its allowlist check. It asks for approval and then repeats the read-only checks, verifying the previously displayed local/remote SHA before attempting `git pull --ff-only --no-rebase --no-recurse-submodules origin main`. A stale selection or changed SHA aborts. Git rejects non-fast-forward histories; no reset, force, auto-stash or automatic worker restart is performed. During the explicit pull the application does not allow the owner to close its window, to avoid accidentally terminating an in-progress Git update. Git hooks are disabled for that command; configured file filters may still run as part of Git. Pull is an **owner-triggered Windows source update**, not permission to execute or restart project software. For HTTPS GitHub requests it passes `-c http.sslBackend=openssl -c http.sslVerify=true` to that Git process only (the owner has previously observed Schannel errors on Windows); no global or per-clone Git configuration is changed. GUI labels distinguish TLS, authentication, DNS and network errors where recognizable, without displaying credential-bearing raw Git errors. If local `git status` times out, the remote `main` check still proceeds and the Changes column records the timeout. For network access it checks only a recognized `AlexPastukhh` GitHub origin and uses non-interactive Git settings. **АКТУАЛЕН** means the local `refs/heads/main` SHA matches GitHub; a different current branch or local edits are flagged in separate columns and in the review summary. **РАЗЛИЧАЮТСЯ** does not imply the next pull is safe. Windows PowerShell 5.1 + WinForms + git.exe are required. Windows runtime compilation/UI has **not** been verified inside Docker; the owner must test the first GUI launch on Windows.
+**Two independent branch selectors per environment:** `Ветка для просмотра`
+changes only the branch whose SHA/status is displayed; **no Git checkout**.
+`Активная ветка` always reports actual `symbolic-ref HEAD` from that environment;
+clicking it offers local existing branches for an explicit Git switch (with
+confirmation and fresh preflight). Switching does **not** change the branch
+selected for viewing. The overall workflow state is always derived from the
+actual active Docker and Windows branches, never from their view selectors.
+All-`main` clean equality is green `АКТУАЛЕН`; equality on a non-main branch is
+`АКТУАЛЕН · НЕ MAIN` (warning rather than error). It also distinguishes
+Docker unstaged/uncommitted files, Docker commits ahead of GitHub, Windows
+behind, unexpected Windows commits ahead (error), divergent history, missing
+Windows clones and unknown/unverified state. A different SHA alone is **not**
+called ahead or behind. On user-triggered Check, GitHub branches are obtained
+via verified `ls-remote --heads`; Docker ancestry is checked in its Git object
+database with exact GitHub SHA and Windows ancestry in the Windows clone. If
+required Git objects are missing, direction remains `НЕИЗВЕСТНО` instead of
+guessed. Windows may fetch **Git metadata only** for its active branch to get
+exact counts, without changing worktree files or its checked-out branch.
 
-## Windows и Docker: раздельный статус и операции
+**Operating behavior:** opening the window reads the Docker inventory only;
+remote GitHub/Windows checks require `Проверить выбранные` or `Проверить все`.
+Checks execute off the UI thread and can be cancelled. Docker read-only
+export never fetches, pushes or changes a worktree. The owner-only actions are:
 
-**Обычная проверка одной или нескольких папок одновременно проверяет Windows и Docker.**
-«Проверить выбранные» проверяет только выделенные Git-клоны, «Проверить все» —
-все обнаруженные Windows Git-клоны. Для каждого имени проверяется:
+- `Pull Windows` only for one verified clean Windows clone, the currently
+  active **and viewed** Windows branch, approved Docker/Windows origin, and
+  confirmed `WindowsAhead == 0`, `WindowsBehind > 0`. It confirms the exact
+  displayed GitHub SHA, repeats GitHub/Windows preflight, fetches the selected
+  branch, checks `FETCH_HEAD` still equals that SHA, checks HEAD/branch/clean
+  worktree again, and performs **`git merge --ff-only FETCH_HEAD`**. The button
+  is called Pull but uses exact-SHA fetch + fast-forward merge to prevent
+  accidentally importing a newer unreviewed GitHub commit. No forced reset,
+  stash, force-push, auto-restart or deploy. Configured Git file filters may
+  still run on Git writes.
+- Windows branch switch requires clean tree and an existing **local** target
+  branch, approved matching remote, user confirmation, and a fresh branch,
+  HEAD, dirty-status and target SHA check; command is `git switch --no-guess`.
+- Docker branch switch is **explicit owner action**, never automatic, and
+  requires a clean Docker Git tree, existing local target branch, owner
+  confirmation and reverified active branch/HEAD via exporter `--switch-*`.
+  Switching the shared infrastructure repositories `tunnel`, `rd-graphs`,
+  `script-control-center` and `security` is blocked in the GUI/exporter.
+  It can still affect files used by other running programs; do not treat the
+  GUI confirmation as approval to alter protected live infrastructure.
 
-- **Windows:** локальные незакоммиченные файлы и сравнение локального `main` с
-  GitHub `main` (необязательный `git fetch` только для получения истории).
-- **Docker:** незакоммиченные файлы и HEAD в
-  `/workspace/repo/Repos/<имя Windows-папки>`; HEAD сопоставляется с проверенным
-  GitHub SHA. `SHA≠GH` означает отличие коммитов, но не определяет ahead/behind.
+**Windows is a receiver, not an authoring environment:** no Windows commit-all
+or push button in the new default screen. Unexpected local edits or Windows
+commits ahead of GitHub stop the normal workflow. Source updates do not
+restart any running Fortis/RDG services. The historical TSV import and
+old main-only Windows commit-all remain in the unused legacy UI source; the
+new GUI does not import old `FORTIS_DOCKER_STATUS_V1` TSV files. The new
+Docker branch snapshot is `FORTIS_DOCKER_BRANCH_V2` (name, active branch,
+HEAD, dirty count, local branches, approved origin) and is not stored in Git.
 
-Проверка Docker выполняется **одним вызовом** локального `docker.exe exec`
-для выбранной группы, внутри фиксированного контейнера **`fortis-repo-test`**
-от пользователя `1000:1000`:
-
-```powershell
-docker exec --user 1000:1000 fortis-repo-test python3 -B /workspace/repo/Repos/script-control-center/tools/Export-Docker-Mirror-Status.py --stdout --repo simulation
-```
-
-Экспорт использует только `git rev-parse` и `git status` с
-`GIT_OPTIONAL_LOCKS=0`. Он не изменяет файлов и не выполняет checkout, commit,
-push, git fetch, запуск программ, перезапуск или пересоздание контейнера.
-Проверка запускается только по кнопке, окно остаётся отзывчивым. Каждый
-результат помечается временем выполнения — это проверка **по запросу**, а не
-непрерывный мониторинг. Для отсутствующей Docker-папки отображается
-`Нет репо в Docker`, для недоступного Docker Desktop / контейнера —
-отдельная ошибка, а не ложное `Нет изменений`. Проверка Windows при этом
-продолжается. Кнопка «Отмена проверки» отменяет и попытку Docker exec.
-
-**Компактная таблица и полные подробности:** столбцы №2 (`GitHub main`),
-№6 (`Windows: изменения`), №7 (`Отстаёт на`) и №9 (`Docker: изменения`)
-сделаны уже для лучшего обзора. Если значение не помещается в таблицу,
-оно **не сокращается в нижней панели**. При выборе одной строки нижняя
-панель выводит все девять полей по порядку таблицы, затем полный Windows-путь,
-полный Docker HEAD, источник и время проверки, сравнение Docker/GitHub и
-сведения о доступности операций. Длинные значения переносятся на следующую
-строку, панель прокручивается вертикально.
-
-**Импорт TSV** оставлен запасным способом на случай отсутствия Docker Desktop.
-Он открывает диалог файла, а не выполняет проверку. Импортированный статус
-помечается `(TSV)`; старый (более 24 часов) — `(старый)`.
-
-Для ручного создания TSV внутри Docker (без вывода токенов и содержимого файлов):
+**Verification:** offline Linux source/fixture tests and Docker exporter can be
+checked without touching live state:
 
 ```bash
-python3 /workspace/repo/Repos/script-control-center/tools/Export-Docker-Mirror-Status.py
-# /workspace/repo/Workfiles/windows-docker-audit/docker-status.tsv
+python3 -B -m unittest test_mirror_workflow_source test_mirror_status_source test_mirror_git_history
+python3 -B tools/Export-Docker-Branch-Workflow.py --stdout --repo visual-workspace
 ```
 
-Передайте TSV на Windows через удобный канал и выберите в «Импорт TSV».
-Он содержит только имя, HEAD SHA и количество изменённых путей; кеш в
-`%LOCALAPPDATA%\FortisGitMirror\docker-status.tsv` находится **вне** Git-клонов.
+For **real Windows WinForms compilation**, run from the reviewed Windows Git
+clone only after owner-approved source propagation:
 
-**Копировать пути** копирует Windows-путь и *предполагаемый* Docker-путь
-`/workspace/repo/Repos/<имя Windows-папки>`, помечая его как неподтверждённый.
-Реальное имя GitHub-репозитория может отличаться от имени локального каталога.
+```powershell
+powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File .\Test-MirrorWorkflowCompile.ps1
+```
 
-**Коммит всего (Windows)** — ручное исключение из стандартного Docker-first
-workflow: доступен только для **одного выбранного** проверенного Windows-клона
-на `main`, с незакоммиченными изменениями и совпадающими локальным/GitHub SHA.
-Требует сообщения и двойного подтверждения, затем выполняет `git add -A` и
-`git commit -m ...` с отключёнными хуками и подписью. Git добавляет всё,
-что ещё не исключено `.gitignore` (в том числе удаления); **уже отслеживаемые
-файлы игнорирование не отменяет**. Автоматического `push` нет. Не используйте
-эту кнопку для нормальной разработки в Docker; возможны секреты в файлах и
-последующее состояние `Windows впереди GitHub`. Для выборочного stage/commit
-используйте PowerShell. Если commit не удался после stage, файлы могут
-остаться staged — откат не выполняется. Проверка данных и ручной Pull по-прежнему
-не влияют на работающие программы.
-
-Для трёх проектов с ранее побайтово проверенными Windows-файлами есть
-`tools/Sync-Windows-Verified-Mirrors.ps1`. В Windows PowerShell он по умолчанию
-выполняет только preview ожидаемых SHA, ветки, origin и текущего состояния.
-Только `-Apply` сохраняет незакоммиченное дерево в локальный Git stash, затем
-fetch и `merge --ff-only` с повторной сверкой точного SHA; stash не удаляется.
-Скрипт предназначен только для `ai-conspects`, `feature-projection`,
-`simulation` и конкретных SHA от 01.11.2026. Скрипт поддерживает
-возобновление после частичного выполнения: уже обновлённые чистые клоны
-пропускаются, а при оставшихся изменениях после `stash` печатается их перечень
-и операция останавливается без `fetch`/`merge`. Если состояние изменилось,
-скрипт останавливается, не переписывая историю. Это отдельный владелец-управляемый
-переход Windows-клона, не автоматический рабочий процесс и не перезапуск софта.
+The compiler test does not open the UI, check GitHub, run Docker, switch
+branches or pull. Windows UI compilation and end-to-end owner acceptance
+remain **not verified from the Docker environment**. Treat the newly
+implemented UI as a source candidate until those tests pass.
 
 ## Requirements and verification
 
