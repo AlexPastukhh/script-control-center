@@ -25,7 +25,7 @@ class MirrorInspectorSourceChecks(unittest.TestCase):
         for cmd in ('rev-parse --verify', 'symbolic-ref --quiet', 'status --porcelain',
                     'remote get-url origin', 'ls-remote --exit-code'):
             self.assertIn(cmd, ui)
-        for forbidden in ('"push ', '"fetch ', '"checkout ', '"reset ', '"clean ', '"commit '):
+        for forbidden in ('"push ', '"checkout ', '"reset ', '"clean ', '"commit '):
             self.assertNotIn(forbidden, ui)
         self.assertIn('GIT_TERMINAL_PROMPT', ui)
         self.assertIn('GCM_INTERACTIVE', ui)
@@ -75,7 +75,8 @@ class MirrorInspectorSourceChecks(unittest.TestCase):
 
     def test_pull_requires_clean_main_known_shas_not_failed_network(self):
         ui = (ROOT / 'Mirror-Status.UI.cs').read_text(encoding='utf-8-sig')
-        for condition in ('State == "РАЗЛИЧАЮТСЯ"', 'Branch == "main"',
+        for condition in ('State == "ОТСТАЁТ"', 'BehindCount > 0', 'AheadCount == 0',
+                          'Branch == "main"',
                           'Changes == "Нет"', 'Regex.IsMatch(LocalFull,',
                           'Regex.IsMatch(RemoteFull,'):
             self.assertIn(condition, ui)
@@ -84,12 +85,30 @@ class MirrorInspectorSourceChecks(unittest.TestCase):
         self.assertIn('log -1 --format=%h%x09%as%x09%s', ui)
         self.assertIn('Последний локальный коммит:', ui)
         self.assertIn('list.Columns.Add("Последний локальный коммит", 310)', ui)
-        self.assertIn('row.Item.SubItems[6].Text = result.Commit', ui)
-        self.assertIn('row.Item.SubItems[6].Text = checkedState.Commit', ui)
+        self.assertIn('row.Item.SubItems[7].Text = result.Commit', ui)
+        self.assertIn('row.Item.SubItems[7].Text = checkedState.Commit', ui)
         self.assertIn('GitHub main:', ui)
         self.assertIn('status --porcelain=v1 --untracked-files=all', ui)
         self.assertNotIn('status --porcelain=v1 --untracked-files=normal --ignore-submodules=all', ui)
         self.assertEqual(ui.count('pull --ff-only --no-rebase --no-recurse-submodules origin main'), 1)
+
+    def test_behind_history_counts_only_after_verified_git_metadata(self):
+        ui = (ROOT / 'Mirror-Status.UI.cs').read_text(encoding='utf-8-sig')
+        for marker in ('Отстаёт на', 'GitFetchMain(path, https)',
+                       'rev-list --left-right --count', 'TryCounts(counts.Output, data)',
+                       'data.BehindCount = behind', 'data.AheadCount = ahead',
+                       'ИСТОРИЯ НЕИЗВЕСТНА', 'ЛОКАЛЬНО ВПЕРЕДИ', 'ИСТОРИИ РАЗОШЛИСЬ',
+                       'fetch --no-tags --no-recurse-submodules origin main',
+                       'GIT_OPTIONAL_LOCKS', 'http.sslVerify=true'):
+            self.assertIn(marker, ui)
+        self.assertIn('data.Behind = "0"', ui)
+        self.assertIn('if (data.BehindCount < 0)', ui)
+        self.assertIn('rev-parse --is-shallow-repository', ui)
+        self.assertIn('НЕПОЛНАЯ ИСТОРИЯ', ui)
+        self.assertIn('data.Behind = "?"', ui)
+        self.assertIn('if (data.AheadCount > 0 && data.BehindCount > 0)', ui)
+        self.assertIn('data.State = "ОТСТАЁТ"', ui)
+        self.assertIn('psi.EnvironmentVariables["GIT_OPTIONAL_LOCKS"] = "1"', ui)
 
     def test_original_cli_report_kept(self):
         report = (ROOT / 'Mirror-Status.Report.ps1').read_text(encoding='utf-8')

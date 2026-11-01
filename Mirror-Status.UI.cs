@@ -34,9 +34,13 @@ namespace FortisMirror {
     internal string Commit = "Сведения о коммите не получены.";
     internal string Branch = "—";
     internal string Changes = "—";
+    internal string Behind = "—";
+    internal int BehindCount = -1;
+    internal int AheadCount = -1;
     internal bool CanPull {
       get {
-        return State == "РАЗЛИЧАЮТСЯ" && Branch == "main" && Changes == "Нет" &&
+        return State == "ОТСТАЁТ" && BehindCount > 0 && AheadCount == 0 &&
+          Branch == "main" && Changes == "Нет" &&
           Regex.IsMatch(LocalFull, @"^[0-9a-fA-F]{40}$") &&
           Regex.IsMatch(RemoteFull, @"^[0-9a-fA-F]{40}$");
       }
@@ -110,6 +114,7 @@ namespace FortisMirror {
       list.Columns.Add("GitHub SHA", 105);
       list.Columns.Add("Ветка", 100);
       list.Columns.Add("Изменения", 95);
+      list.Columns.Add("Отстаёт на", 98);
       list.Columns.Add("Последний локальный коммит", 310);
       layout.Controls.Add(list, 0, 1);
 
@@ -168,13 +173,15 @@ namespace FortisMirror {
         RepoRow selected = (RepoRow)list.SelectedItems[0].Tag;
         if (selected.Last == null) {
           detail.Text = selected.Path + Environment.NewLine +
-            "Коммиты не проверены. Проверка не изменяет файлы, pull требует отдельного подтверждения.";
+            "Коммиты не проверены. Проверка может загрузить историю в .git, но не изменяет рабочие файлы.";
         } else {
           CheckResult v = selected.Last;
           detail.Text = selected.Path + Environment.NewLine +
             "Локальный main: " + (v.LocalFull.Length > 0 ? v.LocalFull : "неизвестен") + Environment.NewLine +
             "Последний локальный коммит: " + v.Commit + Environment.NewLine +
-            "GitHub main: " + (v.RemoteFull.Length > 0 ? v.RemoteFull : "неизвестен") +
+            "GitHub main: " + (v.RemoteFull.Length > 0 ? v.RemoteFull : "неизвестен") + Environment.NewLine +
+            "Коммитов позади: " + v.Behind +
+            (v.AheadCount > 0 ? "  |  Локальных коммитов сверх общего предка: " + v.AheadCount : "") +
             (v.CanPull ? "   |   Pull доступен с подтверждением" : "   |   Pull заблокирован");
         }
       } else {
@@ -204,7 +211,7 @@ namespace FortisMirror {
           item.SubItems.Add(git ? "НЕ ПРОВЕРЕН" : "НЕ GIT-КЛОН");
           item.SubItems.Add("—"); item.SubItems.Add("—");
           item.SubItems.Add("—"); item.SubItems.Add("—");
-          item.SubItems.Add("—");
+          item.SubItems.Add("—"); item.SubItems.Add("—");
           if (!git) item.ForeColor = Color.FromArgb(131, 153, 176);
           var row = new RepoRow { Path = folder, IsGit = git, Item = item };
           item.Tag = row;
@@ -214,7 +221,7 @@ namespace FortisMirror {
         int count = repositories.FindAll(delegate(RepoRow r) { return r.IsGit; }).Count;
         progress.Text = "Найдено Git-клонов: " + count + "  |  Всего папок: " + repositories.Count +
           "  |  Сетевая проверка не запускалась.";
-        detail.Text = "Папки показаны сразу. Проверка обращается только к GitHub origin, не изменяя Git-клоны.";
+        detail.Text = "Проверка сравнивает main с GitHub и при необходимости загружает историю Git в .git; рабочие файлы не меняет.";
       } catch (Exception ex) {
         progress.Text = "Ошибка чтения зеркальной папки.";
         detail.Text = ex.Message;
@@ -263,7 +270,8 @@ namespace FortisMirror {
             row.Item.SubItems[3].Text = result.Remote;
             row.Item.SubItems[4].Text = result.Branch;
             row.Item.SubItems[5].Text = result.Changes;
-            row.Item.SubItems[6].Text = result.Commit;
+            row.Item.SubItems[6].Text = result.Behind;
+            row.Item.SubItems[7].Text = result.Commit;
             row.Item.ForeColor = result.State == "АКТУАЛЕН" && result.Branch == "main" && result.Changes == "Нет" ?
               Color.FromArgb(116, 215, 169) : Color.FromArgb(255, 195, 117);
             progress.Text = "Проверено: " + finished + " / " + targets.Count;
@@ -345,7 +353,8 @@ namespace FortisMirror {
             row.Item.SubItems[3].Text = checkedState.Remote;
             row.Item.SubItems[4].Text = checkedState.Branch;
             row.Item.SubItems[5].Text = checkedState.Changes;
-            row.Item.SubItems[6].Text = checkedState.Commit;
+            row.Item.SubItems[6].Text = checkedState.Behind;
+            row.Item.SubItems[7].Text = checkedState.Commit;
             row.Item.ForeColor = checkedState.State == "АКТУАЛЕН" &&
               checkedState.Branch == "main" && checkedState.Changes == "Нет" ?
               Color.FromArgb(116, 215, 169) : Color.FromArgb(255, 195, 117);
@@ -458,11 +467,109 @@ namespace FortisMirror {
       string remoteHash = m.Groups[1].Value.ToLowerInvariant();
       data.RemoteFull = remoteHash;
       data.Remote = remoteHash.Substring(0, 8);
-      if (!local.Ok) data.State = "НЕТ ЛОКАЛЬНОГО MAIN";
-      else data.State = String.Equals(local.Output, remoteHash, StringComparison.OrdinalIgnoreCase) ?
-        "АКТУАЛЕН" : "РАЗЛИЧАЮТСЯ";
-      // A different SHA does not mean that git pull --ff-only will succeed.
+      if (!local.Ok) { data.State = "НЕТ ЛОКАЛЬНОГО MAIN"; return data; }
+      if (String.Equals(local.Output, remoteHash, StringComparison.OrdinalIgnoreCase)) {
+        data.State = "АКТУАЛЕН";
+        data.BehindCount = 0;
+        data.AheadCount = 0;
+        data.Behind = "0";
+        return data;
+      }
+      // Shallow history can undercount commits. Never display a false exact number.
+      GitResult shallow = GitRead(path, "rev-parse --is-shallow-repository", 5000, token);
+      if (!shallow.Ok || shallow.Output != "false") {
+        data.State = shallow.Ok ? "НЕПОЛНАЯ ИСТОРИЯ" : "ИСТОРИЯ НЕИЗВЕСТНА";
+        data.Behind = "?";
+        return data;
+      }
+      // ls-remote reveals only a SHA, not commit history. Try locally cached objects;
+      // if missing, a user-triggered Check may fetch Git METADATA into this clone.
+      // The working tree, branch checkout and running programs are not updated.
+      GitResult counts = GitRead(path, "rev-list --left-right --count " +
+        data.LocalFull + "..." + data.RemoteFull, 8000, token);
+      if ((!counts.Ok || !TryCounts(counts.Output, data)) && !token.IsCancellationRequested) {
+        GitResult fetched = GitFetchMain(path, https);
+        if (fetched.Ok) {
+          // GitHub main may have moved while fetching. Do not claim any count based
+          // on an older SHA unless that exact SHA is present in the object database.
+          counts = GitRead(path, "rev-list --left-right --count " +
+            data.LocalFull + "..." + data.RemoteFull, 8000, token);
+          if (counts.Ok) TryCounts(counts.Output, data);
+        }
+      }
+      if (data.BehindCount < 0) {
+        data.Behind = "?";
+        data.State = "ИСТОРИЯ НЕИЗВЕСТНА";
+      } else if (data.AheadCount > 0 && data.BehindCount > 0) {
+        data.State = "ИСТОРИИ РАЗОШЛИСЬ";
+      } else if (data.AheadCount > 0) {
+        data.State = "ЛОКАЛЬНО ВПЕРЕДИ";
+      } else if (data.BehindCount > 0) {
+        data.State = "ОТСТАЁТ";
+      } else {
+        data.State = "ИСТОРИЯ НЕИЗВЕСТНА";
+      }
       return data;
+    }
+
+    private static bool TryCounts(string text, CheckResult data) {
+      Match match = Regex.Match(text, @"^\s*(\d+)\s+(\d+)\s*$");
+      int ahead, behind;
+      if (!match.Success || !Int32.TryParse(match.Groups[1].Value, out ahead) ||
+          !Int32.TryParse(match.Groups[2].Value, out behind)) return false;
+      data.AheadCount = ahead;
+      data.BehindCount = behind;
+      data.Behind = behind.ToString();
+      return true;
+    }
+
+    // Fetch updates ONLY Git metadata (objects/FETCH_HEAD and possibly origin/main).
+    // It is performed after an explicit Check, not on window opening.
+    // No working-tree files, local main branch or running services are touched.
+    private GitResult GitFetchMain(string repo, bool openSsl) {
+      var result = new GitResult { Output = "" };
+      try {
+        using (var proc = new Process()) {
+          var psi = proc.StartInfo;
+          psi.FileName = gitExe;
+          psi.Arguments = (openSsl ?
+            "-c http.sslBackend=openssl -c http.sslVerify=true " : "") +
+            "-c core.fsmonitor=false -c submodule.recurse=false " +
+            "-C " + Quote(repo) + " fetch --no-tags --no-recurse-submodules origin main";
+          psi.UseShellExecute = false;
+          psi.CreateNoWindow = true;
+          psi.RedirectStandardOutput = true;
+          psi.RedirectStandardError = true;
+          psi.EnvironmentVariables["GIT_TERMINAL_PROMPT"] = "0";
+          psi.EnvironmentVariables["GCM_INTERACTIVE"] = "never";
+          psi.EnvironmentVariables["GIT_OPTIONAL_LOCKS"] = "1";
+          psi.EnvironmentVariables["GIT_SSH_COMMAND"] = "ssh -o BatchMode=yes -o ConnectTimeout=8";
+          var errors = new StringBuilder();
+          object gate = new object();
+          proc.OutputDataReceived += delegate(object sender, DataReceivedEventArgs e) { };
+          proc.ErrorDataReceived += delegate(object sender, DataReceivedEventArgs e) {
+            if (e.Data != null) lock (gate) {
+              if (errors.Length < 4096) errors.AppendLine(e.Data);
+            }
+          };
+          proc.Start();
+          proc.BeginOutputReadLine();
+          proc.BeginErrorReadLine();
+          // Bound the metadata fetch, unlike the owner-approved explicit pull.
+          bool completed = proc.WaitForExit(40000);
+          if (!completed) {
+            result.Timeout = true;
+            try { proc.Kill(); } catch (Exception) { }
+            proc.WaitForExit(2500);
+          } else {
+            proc.WaitForExit();
+            result.ExitCode = proc.ExitCode;
+            result.Ok = proc.ExitCode == 0;
+          }
+          lock (gate) result.Failure = ClassifyGitError(errors.ToString());
+        }
+      } catch (Exception) { result.Ok = false; }
+      return result;
     }
 
     private static bool AllowedOrigin(string url) {
