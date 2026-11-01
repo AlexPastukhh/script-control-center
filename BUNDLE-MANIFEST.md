@@ -45,3 +45,7 @@ separately registered as catalog entries.
 The importer displays whether each required Windows file exists at import
 time. Docker/container health is deliberately checked only when the user
 explicitly launches the corresponding worker.
+
+## Git-clone source transition (2026-11-01)
+
+For the new source-of-truth design, the worker files **in the Windows Git clone** now resolve the Fortis Repo 1/2 and shared Guard scripts under `launchers/` relative to their own `$PSScriptRoot`. The external installed-file table above documents the **historical pre-migration** paths; it is not the new runtime contract. The updater executable remains external to this repository. The Repo 1/2 native runtime, keys and profiles also remain machine-local. Refer to `docs/GIT-WINDOWS-SOURCE-OF-TRUTH.md` for acceptance and rollback. Do not retire old Windows launchers before a real reconnect test.

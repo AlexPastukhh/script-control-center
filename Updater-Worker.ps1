@@ -2,7 +2,7 @@
 # No Docker containers or RDG credentials are changed by this preflight.
 $ErrorActionPreference = 'Stop'
 try {
-    $prepare = Join-Path $env:LOCALAPPDATA 'FortisRDGLauncherV2\Start-Fortis.ps1'
+    $prepare = Join-Path $PSScriptRoot 'launchers\FortisRDGLauncherV2\Start-Fortis.ps1'
     $updater = Join-Path $env:LOCALAPPDATA `
       'RDG-Server\cicd-bootstrap-ci-20261029t051843803595-4546c7d69e\files\RDG-CICD-Bootstrap\Update-RDG.ps1'
     if (-not (Test-Path -LiteralPath $prepare -PathType Leaf)) { throw "Не найден $prepare" }

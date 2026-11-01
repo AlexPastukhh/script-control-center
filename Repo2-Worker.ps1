@@ -4,8 +4,8 @@ $readyMarker = $null
 $markerTemp = $null
 $exitCode = 0
 try {
-    $prepare = Join-Path $env:LOCALAPPDATA 'FortisRDGLauncherV2\Start-Fortis.ps1'
-    $repo2 = Join-Path $env:LOCALAPPDATA 'FortisRepoPlus2\FortisRepo2-quiet-logs.ps1'
+    $prepare = Join-Path $PSScriptRoot 'launchers\FortisRDGLauncherV2\Start-Fortis.ps1'
+    $repo2 = Join-Path $PSScriptRoot 'launchers\FortisRepoPlus2\FortisRepo2-quiet-logs.ps1'
     if (-not (Test-Path -LiteralPath $prepare -PathType Leaf)) { throw "Не найден $prepare" }
     if (-not (Test-Path -LiteralPath $repo2 -PathType Leaf)) { throw "Не найден $repo2" }
     & $prepare

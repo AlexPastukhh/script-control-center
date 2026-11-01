@@ -2,7 +2,7 @@
 # No interactive prompt here: the GUI requests confirmation first.
 $ErrorActionPreference = 'Stop'
 try {
-    $common = Join-Path $env:LOCALAPPDATA 'FortisRDGLauncherV2\Common.ps1'
+    $common = Join-Path $PSScriptRoot 'launchers\FortisRDGLauncherV2\Common.ps1'
     if (-not (Test-Path -LiteralPath $common -PathType Leaf)) { throw "Не найден $common" }
     . $common
     Assert-Docker

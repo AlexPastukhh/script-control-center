@@ -2,7 +2,7 @@
 # which may have been modified to run an interactive `docker exec -it tail -f`.
 $ErrorActionPreference = 'Stop'
 try {
-    $common = Join-Path $env:LOCALAPPDATA 'FortisRDGLauncherV2\Common.ps1'
+    $common = Join-Path $PSScriptRoot 'launchers\FortisRDGLauncherV2\Common.ps1'
     if (-not (Test-Path -LiteralPath $common -PathType Leaf)) { throw "Не найден $common" }
     . $common
     $id = Ensure-Fortis
