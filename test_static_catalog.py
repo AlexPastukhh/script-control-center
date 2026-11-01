@@ -142,6 +142,66 @@ class RegistrationChecks(unittest.TestCase):
         self.assertIn('private static void KillProcessTree(int processId)',source)
         self.assertIn('KillProcessTree(pid[e.Id])',source)
         self.assertIn('whose start time was verified by IsLive',source)
+    def test_log_output_updates_incrementally_without_forced_scroll(self):
+        source=(ROOT/'ScriptCatalog.cs').read_text()
+        block=source[source.index('private void SetOutputText(string value)'):
+                     source.index('private void RefreshSelected()',source.index('private void SetOutputText(string value)'))]
+        self.assertIn('String.Equals(shownOutput,value,StringComparison.Ordinal)',block)
+        self.assertIn('value.StartsWith(shownOutput,StringComparison.Ordinal)',block)
+        self.assertIn('output.AppendText(value.Substring(shownOutput.Length))',block)
+        self.assertIn('EM_GETFIRSTVISIBLELINE',block)
+        self.assertIn('EM_GETLINECOUNT',block)
+        self.assertIn('EM_LINESCROLL',block)
+        self.assertIn('if(follow)',block)
+        self.assertIn('output.ScrollToCaret()',block)
+        self.assertIn('SendMessage(output.Handle,0x000B',block)
+        self.assertNotIn('if(output.Text!=content)',source)
+
+    def test_external_powershell_detection_requires_exact_path_and_user(self):
+        source=(ROOT/'ScriptCatalog.cs').read_text()
+        for marker in ('using System.Management;', 'using System.Security.Principal;',
+                       'ManagementObjectSearcher(', 'CommandLineToArgvW(', 'LocalFree(ptr)',
+                       'private static string DirectPowerShellFile(string commandLine)',
+                       'String.Equals(args[i],"-File",StringComparison.OrdinalIgnoreCase)',
+                       'Path.IsPathRooted(file)', 'Path.GetFullPath(file)',
+                       'Path.GetExtension(file)', 'pathToIds.TryGetValue(filename',
+                       'GetOwnerSid', 'WindowsIdentity.GetCurrent().User.Value',
+                       'proc.SessionId!=ownSession', 'proc.StartTime',
+                       'ThreadPool.QueueUserWorkItem', 'BeginExternalScan()',
+                       'Работает (внешний)', 'Несколько внешних',
+                       'externalScanReady?"Остановлен":"Не проверен"'):
+            self.assertIn(marker, source)
+        self.assertIn('tick.Interval=1200;',source)
+        self.assertNotIn('Process.GetProcessesByName(',source)
+        self.assertNotIn('GetOwnerSid() == null',source)
+
+    def test_external_stop_does_not_kill_unrelated_or_children(self):
+        source=(ROOT/'ScriptCatalog.cs').read_text()
+        stop=source[source.index('private void StopEntry()'):source.index('private void OpenLog()',source.index('private void StopEntry()'))]
+        for marker in ('visible.Ambiguous', 'ScanExternalRuns(snapshot)',
+                       'SameExternal(visible,verified)', 'SameExternal(verified,final)',
+                       'final.Pid', 'final.Started', 'p.SessionId!=Process.GetCurrentProcess().SessionId',
+                       'p.Kill()', 'MessageBoxDefaultButton.Button2', 'MessageBoxButtons.YesNo'):
+            self.assertIn(marker,stop)
+        external=stop[stop.index('if(!IsLive(e)) {'):stop.index('      if(MessageBox.Show("Завершить запущенный из центра')]
+        self.assertNotIn('KillProcessTree(',external)
+        self.assertNotIn('taskkill.exe',external)
+        self.assertNotIn('/T /F',external)
+        self.assertIn('if(!matches.TryGetValue(e.Id,out verified)',external)
+        # Owned mode keeps existing approved runner/stop-token semantics.
+        self.assertIn('KillProcessTree(pid[e.Id])',stop)
+        self.assertIn('File.WriteAllText(marker,"stop"',stop)
+
+    def test_windows_catalog_compilers_reference_management(self):
+        for name in ('Start-ScriptCatalog.ps1','Test-ScriptCatalogCompile.ps1',
+                     'Test-CatalogOnly.ps1'):
+            text=(ROOT/name).read_text(encoding='utf-8-sig')
+            self.assertIn("'System.Management.dll'",text)
+        source=(ROOT/'ScriptCatalog.cs').read_text()
+        self.assertIn('catch(Exception) {',source)
+        self.assertIn('externalScanReady=(found!=null)',source)
+        self.assertIn('externalRuns.Clear();',source)
+
     def test_one_click_fortis_rdg_bundle_import_button(self):
         source=(ROOT/'ScriptCatalog.cs').read_text()
         self.assertIn('AddButton(top, "Готовый набор", delegate { ImportBuiltInBundle(); }',source)

@@ -6,6 +6,10 @@ using System.Diagnostics;
 using System.Collections.Generic;
 using System.Windows.Forms;
 using System.Xml;
+using System.Management;
+using System.Runtime.InteropServices;
+using System.Security.Principal;
+using System.Threading;
 
 namespace FortisRdgControl {
   public sealed class RegisteredScript {
@@ -32,6 +36,26 @@ namespace FortisRdgControl {
     private readonly Dictionary<string, int> pid = new Dictionary<string, int>();
     private string catalogWarning = "";
     private bool loading = false;
+    private string shownOutput = "";
+    private DateTime lastExternalCheckUtc = DateTime.MinValue;
+    private bool externalScanRunning = false;
+    private bool externalScanReady = false;
+    private readonly Dictionary<string, ExternalRun> externalRuns =
+      new Dictionary<string, ExternalRun>(StringComparer.OrdinalIgnoreCase);
+    private sealed class ExternalRun {
+      public int Pid;
+      public DateTime Started;
+      public bool Ambiguous;
+    }
+    private const int EM_GETFIRSTVISIBLELINE = 0xCE;
+    private const int EM_GETLINECOUNT = 0xBA;
+    private const int EM_LINESCROLL = 0xB6;
+    [DllImport("user32.dll", CharSet=CharSet.Auto)]
+    private static extern IntPtr SendMessage(IntPtr handle, int msg, IntPtr wParam, IntPtr lParam);
+    [DllImport("shell32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
+    private static extern IntPtr CommandLineToArgvW(string commandLine, out int argc);
+    [DllImport("kernel32.dll")]
+    private static extern IntPtr LocalFree(IntPtr mem);
     private sealed class BundleDefinition {
       public string Id, Name, FileName;
       public BundleDefinition(string id,string name,string fileName) { Id=id;Name=name;FileName=fileName; }
@@ -241,7 +265,11 @@ namespace FortisRdgControl {
     }
     private string StatusText(RegisteredScript e) {
       if(EntryProblem(e)!=null) return "Исправить";
-      return IsLive(e)?"Работает":"Остановлен";
+      if(IsLive(e))return "Работает";
+      ExternalRun other;
+      if(externalRuns.TryGetValue(e.Id,out other))
+        return other.Ambiguous?"Несколько внешних":"Работает (внешний)";
+      return externalScanReady?"Остановлен":"Не проверен";
     }
     private string ModeText(RegisteredScript e) { return e.Mode=="hidden"?"В центре":"Своё окно"; }
     private RegisteredScript FindDuplicate(RegisteredScript candidate) {
@@ -280,17 +308,155 @@ namespace FortisRdgControl {
     }
     private void RefreshStatuses() {
       if(loading)return;
+      if(!externalScanRunning && (DateTime.UtcNow-lastExternalCheckUtc).TotalSeconds>=6)
+        BeginExternalScan();
       foreach(ListViewItem row in items.Items) {
         RegisteredScript e=row.Tag as RegisteredScript;
         if(e==null) continue;
         string problem=EntryProblem(e);
         bool live=problem==null && IsLive(e);
-        row.SubItems[1].Text=problem!=null?"Исправить":(live?"Работает":"Остановлен");
-        row.SubItems[2].Text=ModeText(e);
-        row.ForeColor=problem!=null?Color.FromArgb(246,184,112):(live?Color.FromArgb(112,220,166):Color.FromArgb(232,240,250));
+        ExternalRun external=null;
+        bool other=problem==null && !live && externalRuns.TryGetValue(e.Id,out external);
+        string status=problem!=null?"Исправить":live?"Работает":
+          other?(external.Ambiguous?"Несколько внешних":"Работает (внешний)"):
+          externalScanReady?"Остановлен":"Не проверен";
+        if(row.SubItems[1].Text!=status) row.SubItems[1].Text=status;
+        string mode=ModeText(e);
+        if(row.SubItems[2].Text!=mode) row.SubItems[2].Text=mode;
+        Color color=problem!=null?Color.FromArgb(246,184,112):
+          live?Color.FromArgb(112,220,166):
+          other?Color.FromArgb(124,192,245):Color.FromArgb(232,240,250);
+        if(row.ForeColor!=color) row.ForeColor=color;
       }
       RefreshSelected();
     }
+
+    // Only direct "powershell.exe -File <absolute .ps1 path>" launches can
+    // be associated safely. Interactive -Command, -EncodedCommand, batch,
+    // Python and service-hosted scripts are intentionally not guessed.
+    private static string DirectPowerShellFile(string commandLine) {
+      if(String.IsNullOrEmpty(commandLine))return null;
+      int argc=0;
+      IntPtr ptr=IntPtr.Zero;
+      try {
+        ptr=CommandLineToArgvW(commandLine,out argc);
+        if(ptr==IntPtr.Zero || argc<3 || argc>128)return null;
+        var args=new string[argc];
+        for(int i=0;i<argc;i++)
+          args[i]=Marshal.PtrToStringUni(Marshal.ReadIntPtr(ptr,i*IntPtr.Size));
+        for(int i=1;i<argc-1;i++) {
+          if(!String.Equals(args[i],"-File",StringComparison.OrdinalIgnoreCase) &&
+             !String.Equals(args[i],"/File",StringComparison.OrdinalIgnoreCase))continue;
+          // Reject scripts passed after -Command or an encoded expression:
+          // that PowerShell is a host, not safely owned by a single file.
+          for(int j=1;j<i;j++)
+            if(String.Equals(args[j],"-Command",StringComparison.OrdinalIgnoreCase) ||
+               String.Equals(args[j],"-EncodedCommand",StringComparison.OrdinalIgnoreCase) ||
+               String.Equals(args[j],"-c",StringComparison.OrdinalIgnoreCase))
+              return null;
+          string file=args[i+1];
+          if(!Path.IsPathRooted(file) ||
+             !String.Equals(Path.GetExtension(file),".ps1",StringComparison.OrdinalIgnoreCase))
+            return null;
+          return Path.GetFullPath(file).TrimEnd(Path.DirectorySeparatorChar,Path.AltDirectorySeparatorChar);
+        }
+      } catch(ArgumentException) { return null; }
+      catch(NotSupportedException) { return null; }
+      finally { if(ptr!=IntPtr.Zero) LocalFree(ptr); }
+      return null;
+    }
+
+    private static Dictionary<string,ExternalRun> ScanExternalRuns(List<RegisteredScript> scripts) {
+      var result=new Dictionary<string,ExternalRun>(StringComparer.OrdinalIgnoreCase);
+      var pathToIds=new Dictionary<string,List<string>>(StringComparer.OrdinalIgnoreCase);
+      foreach(RegisteredScript entry in scripts) {
+        if(!String.Equals(Path.GetExtension(entry.Path??""),".ps1",StringComparison.OrdinalIgnoreCase))
+          continue;
+        string path;
+        try { path=Path.GetFullPath(entry.Path).TrimEnd(Path.DirectorySeparatorChar,Path.AltDirectorySeparatorChar); }
+        catch(ArgumentException) { continue; }
+        catch(NotSupportedException) { continue; }
+        List<string> ids;
+        if(!pathToIds.TryGetValue(path,out ids)) { ids=new List<string>();pathToIds.Add(path,ids); }
+        ids.Add(entry.Id);
+      }
+      if(pathToIds.Count==0)return result;
+      int ownSession=Process.GetCurrentProcess().SessionId;
+      string ownSid=WindowsIdentity.GetCurrent().User.Value;
+      using(var search=new ManagementObjectSearcher(
+        "SELECT ProcessId, Name, CommandLine FROM Win32_Process WHERE Name = 'powershell.exe' OR Name = 'pwsh.exe'")) {
+        foreach(ManagementObject item in search.Get()) {
+          using(item) {
+            object value=item["CommandLine"];
+            string filename=DirectPowerShellFile(value==null?null:value.ToString());
+            if(filename==null)continue;
+            List<string> ids;
+            if(!pathToIds.TryGetValue(filename,out ids))continue;
+            int processId=Convert.ToInt32(item["ProcessId"]);
+            if(processId==Process.GetCurrentProcess().Id)continue;
+            try {
+              // Same Windows user and logon session only.
+              using(ManagementBaseObject owner=item.InvokeMethod("GetOwnerSid",null,null)) {
+                if(owner==null || owner["Sid"]==null)
+                  throw new UnauthorizedAccessException("Cannot verify external process owner");
+                if(!String.Equals(Convert.ToString(owner["Sid"]),
+                  ownSid,StringComparison.OrdinalIgnoreCase))continue;
+              }
+              using(var proc=Process.GetProcessById(processId)) {
+                if(proc.HasExited || proc.SessionId!=ownSession)continue;
+                DateTime started=proc.StartTime;
+                foreach(string id in ids) {
+                  ExternalRun previous;
+                  if(result.TryGetValue(id,out previous)) previous.Ambiguous=true;
+                  else result.Add(id,new ExternalRun { Pid=processId, Started=started });
+                }
+              }
+            } catch(ArgumentException) { }
+            catch(InvalidOperationException) { }
+            catch(System.ComponentModel.Win32Exception) {
+              // If a matching process cannot be inspected, fail the entire
+              // external check rather than falsely reporting "Остановлен".
+              throw new UnauthorizedAccessException("Cannot verify external process");
+            }
+          }
+        }
+      }
+      return result;
+    }
+
+    private void BeginExternalScan() {
+      if(externalScanRunning)return;
+      externalScanRunning=true;
+      lastExternalCheckUtc=DateTime.UtcNow;
+      var snapshot=new List<RegisteredScript>(entries);
+      ThreadPool.QueueUserWorkItem(delegate {
+        Dictionary<string,ExternalRun> found=null;
+        try { found=ScanExternalRuns(snapshot); }
+        catch(Exception) {
+          // WMI can be unavailable or restricted; do not bring down the UI.
+          // Never report "Остановлен" on an unknown external scan.
+          found=null;
+        }
+        try {
+          if(!IsDisposed && IsHandleCreated) BeginInvoke((MethodInvoker)delegate {
+            if(IsDisposed)return;
+            externalScanRunning=false;
+            externalScanReady=(found!=null);
+            externalRuns.Clear();
+            if(found!=null) foreach(var pair in found) externalRuns[pair.Key]=pair.Value;
+            RefreshStatuses();
+          });
+        } catch(InvalidOperationException) { }
+        catch(ObjectDisposedException) { }
+      });
+    }
+
+    private static bool SameExternal(ExternalRun previous,ExternalRun current) {
+      return previous!=null && current!=null && !previous.Ambiguous && !current.Ambiguous &&
+        previous.Pid==current.Pid &&
+        Math.Abs((previous.Started-current.Started).TotalSeconds)<1;
+    }
+
     private void AddEntry() {
       if(entries.Count>=200) { MessageBox.Show("Достигнут лимит 200 записей.");return; }
       using(var d=new OpenFileDialog {
@@ -698,7 +864,7 @@ namespace FortisRdgControl {
     }
     private void EditEntry() {
       var cur=Current;if(cur==null)return;
-      if(IsLive(cur)) { MessageBox.Show(this,"Сначала остановите скрипт. Нельзя менять путь, режим или аргументы во время выполнения: это нарушит контроль запущенного процесса.","Скрипт выполняется",MessageBoxButtons.OK,MessageBoxIcon.Warning);return; }
+      if(IsLive(cur) || externalRuns.ContainsKey(cur.Id)) { MessageBox.Show(this,"Сначала остановите скрипт. Нельзя менять путь, режим или аргументы во время выполнения: это нарушит контроль запущенного процесса.","Скрипт выполняется",MessageBoxButtons.OK,MessageBoxIcon.Warning);return; }
       var copy=new RegisteredScript { Id=cur.Id,BundleId=cur.BundleId,Name=cur.Name,Path=cur.Path,Arguments=cur.Arguments,WorkingDirectory=cur.WorkingDirectory,Mode=cur.Mode };
       if(!EditDialog(copy))return;
       RegisteredScript duplicate=FindDuplicate(copy);
@@ -708,7 +874,7 @@ namespace FortisRdgControl {
     }
     private void DeleteEntry() {
       var e=Current;if(e==null)return;
-      if(IsLive(e)) { MessageBox.Show(this,"Сначала остановите скрипт. Удаление работающей записи скроет её из центра и лишит возможности управлять запуском.","Скрипт выполняется",MessageBoxButtons.OK,MessageBoxIcon.Warning);return; }
+      if(IsLive(e) || externalRuns.ContainsKey(e.Id)) { MessageBox.Show(this,"Сначала остановите скрипт. Удаление работающей записи скроет её из центра и лишит возможности управлять запуском.","Скрипт выполняется",MessageBoxButtons.OK,MessageBoxIcon.Warning);return; }
       if(MessageBox.Show(this,"Удалить регистрацию «"+e.Name+"»? Сам файл скрипта останется на месте.","Удаление",MessageBoxButtons.YesNo,MessageBoxIcon.Warning)!=DialogResult.Yes)return;
       int i=entries.IndexOf(e);if(i<0)return;entries.RemoveAt(i);
       try { SaveEntries();RefreshItems(); }catch(Exception ex){entries.Insert(i,e);MessageBox.Show(ex.Message);}
@@ -759,6 +925,23 @@ namespace FortisRdgControl {
         return;
       }
       if(IsLive(e)) { MessageBox.Show("Этот процесс уже запущен. Повторный запуск отменён.");return; }
+      // Never start a second copy when the same script was launched manually.
+      // Re-check synchronously: the last background WMI snapshot may be stale.
+      try {
+        var matches=ScanExternalRuns(new List<RegisteredScript>{e});
+        ExternalRun found;
+        if(matches.TryGetValue(e.Id,out found)) {
+          MessageBox.Show(this, found.Ambiguous?
+            "Найдено несколько внешних запусков. Новый запуск отменён.":
+            "Скрипт уже запущен вне центра (PID "+found.Pid+"). Новый запуск отменён.",
+            "Внешний процесс",MessageBoxButtons.OK,MessageBoxIcon.Information);
+          return;
+        }
+      } catch(Exception ex) {
+        MessageBox.Show(this,"Не удалось проверить внешние запуски. Запуск отменён: "+ex.Message,
+          "Проверка процесса",MessageBoxButtons.OK,MessageBoxIcon.Warning);
+        return;
+      }
       if(MessageBox.Show(this,"Запустить «"+e.Name+"»?\n"+e.Path+"\n\nСкрипт будет выполняться с вашими правами Windows.","Подтверждение",MessageBoxButtons.YesNo,MessageBoxIcon.Warning,MessageBoxDefaultButton.Button2)!=DialogResult.Yes)return;
       try {
         string args,exe=Interpreter(e,out args);
@@ -787,7 +970,52 @@ namespace FortisRdgControl {
     }
     private void StopEntry() {
       var e=Current;if(e==null)return;
-      if(!IsLive(e)) { MessageBox.Show("Управляемый процесс не обнаружен.");return; }
+      if(!IsLive(e)) {
+        ExternalRun visible;
+        if(!externalRuns.TryGetValue(e.Id,out visible) || !externalScanReady) {
+          MessageBox.Show(this,"Подтверждённый процесс не обнаружен. Для внешних запусков поддерживается прямой запуск PowerShell через -File с абсолютным путём .ps1.",
+            "Нет подтверждённого процесса",MessageBoxButtons.OK,MessageBoxIcon.Information);
+          return;
+        }
+        if(visible.Ambiguous) {
+          MessageBox.Show(this,"Найдено несколько внешних процессов с этим файлом. Остановка заблокирована — нельзя однозначно выбрать PID.",
+            "Неоднозначный запуск",MessageBoxButtons.OK,MessageBoxIcon.Warning);
+          return;
+        }
+        try {
+          var snapshot=new List<RegisteredScript>{e};
+          var matches=ScanExternalRuns(snapshot);
+          ExternalRun verified;
+          if(!matches.TryGetValue(e.Id,out verified) || !SameExternal(visible,verified))
+            throw new InvalidOperationException("Внешний PID изменился или уже завершился; остановка отменена.");
+          string question="Остановить ТОЛЬКО внешне запущенный PowerShell-процесс?"+
+            "\n\nСкрипт: "+e.Path+"\nPID: "+verified.Pid+
+            "\nВремя старта: "+verified.Started.ToString("yyyy-MM-dd HH:mm:ss")+
+            "\n\nКонтрольный центр не запускал этот процесс. Дочерние процессы НЕ будут завершены. " +
+            "Несохранённые данные внешнего скрипта могут быть потеряны. Продолжить?";
+          if(MessageBox.Show(this,question,"Подтвердить внешнюю остановку",
+            MessageBoxButtons.YesNo,MessageBoxIcon.Warning,MessageBoxDefaultButton.Button2)!=DialogResult.Yes)
+            return;
+          matches=ScanExternalRuns(snapshot);
+          ExternalRun final;
+          if(!matches.TryGetValue(e.Id,out final) || !SameExternal(verified,final))
+            throw new InvalidOperationException("Процесс изменился после подтверждения. Остановка отменена.");
+          using(var p=Process.GetProcessById(final.Pid)) {
+            if(p.HasExited || p.SessionId!=Process.GetCurrentProcess().SessionId ||
+               Math.Abs((p.StartTime-final.Started).TotalSeconds)>=1)
+              throw new InvalidOperationException("PID или время старта изменились. Остановка отменена.");
+            p.Kill(); // Exact verified external PowerShell PID only; never taskkill /T.
+          }
+          externalRuns.Remove(e.Id);
+          externalScanReady=false;
+          lastExternalCheckUtc=DateTime.MinValue;
+          RefreshStatuses();
+        } catch(Exception ex) {
+          MessageBox.Show(this,"Внешний процесс не остановлен: "+ex.Message,
+            "Ошибка остановки",MessageBoxButtons.OK,MessageBoxIcon.Warning);
+        }
+        return;
+      }
       if(MessageBox.Show("Завершить запущенный из центра процесс «"+e.Name+"» и его дерево дочерних процессов?\nОтсоединённые или повышенные процессы могут пережить остановку.","Подтверждение остановки",MessageBoxButtons.YesNo,MessageBoxIcon.Warning,MessageBoxDefaultButton.Button2)!=DialogResult.Yes)return;
       try {
         if(!IsLive(e))throw new InvalidOperationException("Процесс уже завершился");
@@ -808,13 +1036,50 @@ namespace FortisRdgControl {
     }
     private void OpenLog() {
       var e=Current;if(e==null)return;
+      if(!IsLive(e) && externalRuns.ContainsKey(e.Id)) {
+        MessageBox.Show(this,"Этот процесс запущен вне Control Center. Его stdout/stderr не перехватываются; имеющийся локальный журнал относится к прежнему управляемому запуску.",
+          "Внешний процесс",MessageBoxButtons.OK,MessageBoxIcon.Information);
+        return;
+      }
       if(e.Mode!="hidden") { MessageBox.Show(this,"Для режима «Своё окно» stdout/stderr не перехватываются. Переключите скрипт в режим «Внутри центра», если ему не нужен интерактивный ввод.","Журнал недоступен",MessageBoxButtons.OK,MessageBoxIcon.Information);return; }
       string path=LogPath(e);
       if(File.Exists(path)) Process.Start("notepad.exe",Quote(path));
       else MessageBox.Show(this,"Журнал ещё не создан. Сначала запустите скрипт в режиме «Внутри центра».","Журнал пуст",MessageBoxButtons.OK,MessageBoxIcon.Information);
     }
+    // Keep the viewport stationary while new log lines arrive; only follow
+    // the tail when the reader was already viewing the last visible lines.
+    // Replacing the whole RichTextBox every 1.2s caused visible jumping.
     private void SetOutputText(string value) {
-      if(!String.Equals(output.Text,value,StringComparison.Ordinal)) output.Text=value;
+      value=(value??"").Replace("\r\n","\n");
+      if(String.Equals(shownOutput,value,StringComparison.Ordinal))return;
+      int first=output.IsHandleCreated ?
+        SendMessage(output.Handle,EM_GETFIRSTVISIBLELINE,IntPtr.Zero,IntPtr.Zero).ToInt32() : 0;
+      int total=output.IsHandleCreated ?
+        SendMessage(output.Handle,EM_GETLINECOUNT,IntPtr.Zero,IntPtr.Zero).ToInt32() : 0;
+      int page=Math.Max(1,output.ClientSize.Height/Math.Max(1,output.Font.Height));
+      bool follow=shownOutput.Length==0 || first+page>=total-2;
+      if(shownOutput.Length>0 && value.StartsWith(shownOutput,StringComparison.Ordinal)) {
+        output.AppendText(value.Substring(shownOutput.Length));
+      } else {
+        // The log may have rotated or its 90 KiB display window may have
+        // advanced. Suppress intermediate repainting for the replacement.
+        if(output.IsHandleCreated) SendMessage(output.Handle,0x000B,IntPtr.Zero,IntPtr.Zero);
+        try { output.Text=value; }
+        finally {
+          if(output.IsHandleCreated) {
+            SendMessage(output.Handle,0x000B,new IntPtr(1),IntPtr.Zero);
+            output.Invalidate();
+          }
+        }
+      }
+      shownOutput=value;
+      if(follow) {
+        output.SelectionStart=output.TextLength;
+        output.ScrollToCaret();
+      } else if(output.IsHandleCreated) {
+        int now=SendMessage(output.Handle,EM_GETFIRSTVISIBLELINE,IntPtr.Zero,IntPtr.Zero).ToInt32();
+        if(now!=first) SendMessage(output.Handle,EM_LINESCROLL,IntPtr.Zero,new IntPtr(first-now));
+      }
     }
     private void RefreshSelected() {
       if(loading)return;
@@ -830,14 +1095,23 @@ namespace FortisRdgControl {
         return;
       }
       string problem=EntryProblem(e);
-      bool live=IsLive(e);
+      bool ownedLive=IsLive(e);
+      ExternalRun ext=null;
+      bool externalLive=!ownedLive && externalScanReady &&
+        externalRuns.TryGetValue(e.Id,out ext);
+      bool live=ownedLive || externalLive;
       detailTitle.Text=String.IsNullOrWhiteSpace(e.Name)?"Без названия":e.Name;
       detailPath.Text=e.Path??"";
       string runInfo="";
       int currentPid;
       DateTime startedAt;
-      if(live && pid.TryGetValue(e.Id,out currentPid)) runInfo="PID: "+currentPid;
-      if(live && launched.TryGetValue(e.Id,out startedAt)) runInfo+=(runInfo.Length>0?"  •  ":"")+"Старт: "+startedAt.ToString("yyyy-MM-dd HH:mm:ss");
+      if(ownedLive && pid.TryGetValue(e.Id,out currentPid)) runInfo="PID: "+currentPid;
+      if(ownedLive && launched.TryGetValue(e.Id,out startedAt)) runInfo+=(runInfo.Length>0?"  •  ":"")+"Старт: "+startedAt.ToString("yyyy-MM-dd HH:mm:ss");
+      if(externalLive && ext!=null) {
+        runInfo=ext.Ambiguous?"Внешних процессов несколько; остановка заблокирована":
+          "Внешний PowerShell PID: "+ext.Pid+"  •  Старт: "+
+          ext.Started.ToString("yyyy-MM-dd HH:mm:ss");
+      }
       detailMeta.Text="Рабочая папка: "+(e.WorkingDirectory??"")+"    •    Режим: "+ModeText(e)+(runInfo.Length>0?"    •    "+runInfo:"");
       if(problem!=null) {
         detailStatus.Text="ТРЕБУЕТ ИСПРАВЛЕНИЯ";
@@ -846,9 +1120,18 @@ namespace FortisRdgControl {
         SetOutputText("Эта запись не будет запущена, пока ошибка не исправлена.\n\n"+problem+"\n\nНажмите «Изменить», выберите настоящий файл скрипта и сохраните запись.");
         return;
       }
-      detailStatus.Text=live?"● ВЫПОЛНЯЕТСЯ":"○ ОСТАНОВЛЕН";
+      detailStatus.Text=ownedLive?"● ВЫПОЛНЯЕТСЯ":
+        externalLive?(ext.Ambiguous?"● НЕСКОЛЬКО ВНЕШНИХ":"● ВНЕШНИЙ ЗАПУСК"):
+        externalScanReady?"○ ОСТАНОВЛЕН":"◌ НЕ ПРОВЕРЕН";
       detailStatus.ForeColor=live?Color.FromArgb(112,220,166):Color.FromArgb(151,174,202);
-      logHeader.Text=e.Mode=="hidden"?"ВЫВОД СКРИПТА • stdout / stderr":"ОТДЕЛЬНОЕ ОКНО • ВЫВОД НЕ ПЕРЕХВАТЫВАЕТСЯ";
+      logHeader.Text=externalLive?"ВНЕШНИЙ POWERSHELL • ВЫВОД НЕ ПЕРЕХВАТЫВАЕТСЯ":
+        e.Mode=="hidden"?"ВЫВОД СКРИПТА • stdout / stderr":"ОТДЕЛЬНОЕ ОКНО • ВЫВОД НЕ ПЕРЕХВАТЫВАЕТСЯ";
+      if(externalLive) {
+        SetOutputText("Скрипт запущен отдельно от Control Center, поэтому его stdout/stderr недоступны в этом окне."+
+          "\n\nОбнаружение: точное совпадение абсолютного пути .ps1 при запуске PowerShell через -File."+
+          "\nОстановка: только после подтверждения точного PID и времени старта; без остановки дерева дочерних процессов.");
+        return;
+      }
       if(e.Mode!="hidden") {
         SetOutputText("Этот скрипт запускается в отдельном окне. Control Center показывает его состояние, но не перехватывает вывод этого окна.\n\nЕсли скрипт поддерживает обычный текстовый вывод и не требует интерактивного ввода, выберите режим «Внутри центра» в настройках.");
         return;
@@ -864,7 +1147,7 @@ namespace FortisRdgControl {
           byte[] bytes=new byte[count];int got=0,n;
           while(got<count && (n=f.Read(bytes,got,count-got))>0)got+=n;
           string content=Encoding.UTF8.GetString(bytes,0,got);
-          if(output.Text!=content) {output.Text=content;output.SelectionStart=output.TextLength;output.ScrollToCaret();}
+          SetOutputText(content);
         }
       } catch(IOException) { }
     }

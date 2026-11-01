@@ -29,7 +29,7 @@ try {
     }
     Add-Type -Path $catalog -ReferencedAssemblies @(
         'System.dll', 'System.Core.dll', 'System.Windows.Forms.dll',
-        'System.Drawing.dll', 'System.Xml.dll'
+        'System.Drawing.dll', 'System.Management.dll', 'System.Xml.dll'
     ) -ErrorAction Stop | Out-Null
 
     [System.Windows.Forms.Application]::EnableVisualStyles()

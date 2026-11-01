@@ -11,7 +11,7 @@ if (-not (Test-Path -LiteralPath $catalog -PathType Leaf)) {
 try {
     Add-Type -Path $catalog -ReferencedAssemblies @(
         'System.dll', 'System.Core.dll', 'System.Windows.Forms.dll',
-        'System.Drawing.dll', 'System.Xml.dll'
+        'System.Drawing.dll', 'System.Management.dll', 'System.Xml.dll'
     ) -ErrorAction Stop | Out-Null
     if (-not ('FortisRdgControl.ScriptCatalogForm' -as [type])) {
         throw 'ScriptCatalogForm type не обнаружен после компиляции.'

@@ -57,6 +57,50 @@ if ($LASTEXITCODE -ne 0) { throw 'Git pull не завершился успеш�
 
 Повторно создавать ярлык и импортировать штатный набор после обычного `pull` **не нужно**. Новые файлы используются при следующем запуске каталога или отдельного worker-процесса, уже работающие процессы не заменяются. `tools/Update-Windows-ControlCenter.ps1 -Apply` предназначен для отдельной предварительной проверки/восстановления ярлыка и **не требуется при каждом обновлении**. Не удалять другие репозитории из `Repos`; не путать Windows-клон с `/workspace/repo/Repos`.
 
+## Скрипт-центр: стабильный журнал и внешние PowerShell-запуски
+
+В окне **«Control Center — пользовательские скрипты»** журнал больше не
+переписывается целиком при каждом обновлении (интервал 1,2 секунды).
+Если пришёл новый текст, он добавляется в конец `RichTextBox`, а позиция
+чтения сохраняется. Автопрокрутка происходит только тогда, когда пользователь
+уже находится внизу. При ротации или сдвиге 90-КиБ окна журнала
+обновление всего содержимого защищено от промежуточной перерисовки.
+
+Кроме запусков из каталога, проверяются процессы **того же пользователя и
+той же Windows-сессии**, непосредственно запущенные через
+`powershell.exe -File "C:\полный\путь\script.ps1"`
+или `pwsh.exe -File ...`. Фоновая проверка WMI выполняется
+примерно раз в 6 секунд, отдельно от UI-потока. Имя процесса само по
+себе не означает совпадение: сопоставляется **полный абсолютный путь
+зарегистрированного `.ps1`**, а владелец и сессия сверяются с текущими.
+
+- `Работает` — собственный подтверждённый runner / PID.
+- `Работает (внешний)` — один точно совпавший внешний PowerShell-процесс;
+  в деталях показаны PID и время старта, **но его stdout/stderr не доступны**.
+- `Несколько внешних` — неоднозначно; остановка заблокирована.
+- `Не проверен` — нет достоверного результата проверки WMI; это не «Остановлен».
+
+**Остановить** для внешнего запуска требует отдельного подтверждения; PID,
+время старта, владелец, сессия и путь `-File` перепроверяются непосредственно
+перед завершением. Завершается только указанный PID PowerShell, без
+`taskkill /T` и без остановки дочернего дерева. Несохранённая работа такого
+скрипта может быть потеряна, поэтому завершение **никогда не происходит
+автоматически**. Для процессов, запущенных самим каталогом, сохраняются
+существующие механизмы: stop-token runner или подтверждённое дерево PID.
+
+**Не обнаруживаются и не останавливаются автоматически** интерактивные
+`& .\script.ps1`, `-Command`/`-EncodedCommand`, относительный путь в
+`-File`, скрипты `cmd`/`python`, службы и процессы другого пользователя
+или сессии. Для таких способов запуска нельзя надёжно определить безопасный
+PID по полной командной строке без дополнительных механизмов сопровождения.
+При ошибке WMI статус остаётся «Не проверен», не «Остановлен».
+
+Компиляция standalone-каталога на Windows без запуска работников:
+
+```powershell
+powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File .\Test-ScriptCatalogCompile.ps1
+```
+
 ## Windows Git mirror inspector (checks + explicit selected pull)
 
 The already-registerable `Fortis-Windows-Mirror-Status.ps1` now opens its own Windows Forms window when launched from the standalone Script Catalog. It immediately lists folders and Git clones under `%USERPROFILE%\Repos` (or an explicit `-MirrorRoot`), and provides **Проверить выбранные**, **Проверить все**, **Pull выбранного**, **Обновить список**, and **Отмена проверки**. You can select one or several folders using **Ctrl+click** / **Shift+click**; **Проверить выбранные** checks only selected Git clones (ignoring non-Git directories). Multi-selection never enables Pull: **Pull выбранного** remains limited to one individually checked, clean, behind-only clone and requires confirmation. Network checks run on a background worker with bounded waits, so the window remains usable. A non-Git directory is listed as such and is never queried.
