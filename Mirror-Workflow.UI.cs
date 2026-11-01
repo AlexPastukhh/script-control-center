@@ -939,13 +939,13 @@ namespace FortisMirror {
 
     public static void Open(string root, string git) {
       Exception error = null;
-      Thread window = new Thread(delegate {
+      Thread window = new Thread(new ThreadStart(delegate() {
         try {
           Application.EnableVisualStyles();
           Application.SetCompatibleTextRenderingDefault(false);
           Application.Run(new WorkflowWindow(root, git));
         } catch (Exception ex) { error = ex; }
-      });
+      }));
       window.SetApartmentState(ApartmentState.STA);
       window.Start(); window.Join();
       if (error != null) throw new InvalidOperationException("Ошибка окна workflow", error);

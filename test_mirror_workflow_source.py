@@ -33,6 +33,12 @@ class WorkflowSource(unittest.TestCase):
         self.assertIn("if ($Cli)", source)
         self.assertIn("Add-Type -Path $source", source)
 
+    def test_windows_powershell_51_thread_ctor_is_unambiguous(self):
+        source = CSharp.read_text(encoding="utf-8")
+        self.assertIn("Thread window = new Thread(new ThreadStart(delegate() {", source)
+        self.assertIn("window.SetApartmentState(ApartmentState.STA);", source)
+        self.assertNotIn("new Thread(delegate {", source)
+
     def test_compact_docker_windows_columns_and_full_details(self):
         source = CSharp.read_text(encoding="utf-8")
         columns = re.search(r"private static readonly string\[\] Columns = \{(.*?)\};",
