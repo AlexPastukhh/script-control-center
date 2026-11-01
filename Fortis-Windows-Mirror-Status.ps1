@@ -5,7 +5,8 @@ Center to open a standalone Windows Forms UI. Enumerates mirror folders immediat
 checks a selected repository or all repositories only when you click a button.
 The companion .cs UI and .ps1 CLI files must stay beside this launcher.
 
-No fetch/pull/checkout/commit/push, no scheduling or background auto-check.
+No automatic fetch/pull/commit/push or background check. Explicit owner-approved
+Pull and Windows-only commit-all are available in the GUI.
 Use -Cli for the original text-only report; -Notify applies only with -Cli.
 #>
 [CmdletBinding()]

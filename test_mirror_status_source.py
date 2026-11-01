@@ -86,7 +86,7 @@ class MirrorInspectorSourceChecks(unittest.TestCase):
         self.assertIn('-c submodule.recurse=false', ui)
         self.assertIn('psi.EnvironmentVariables["GIT_OPTIONAL_LOCKS"] = "1";', ui)
         self.assertIn('e.Cancel = true;', ui)
-        self.assertIn('cancel.Enabled = running && !pulling;', ui)
+        self.assertIn('cancel.Enabled = running && !writing;', ui)
         self.assertIn('result.Ok', ui)
         self.assertIn('НЕЗАКОНЧЕННАЯ ОПЕРАЦИЯ', ui)
 
@@ -126,6 +126,82 @@ class MirrorInspectorSourceChecks(unittest.TestCase):
         self.assertIn('if (data.AheadCount > 0 && data.BehindCount > 0)', ui)
         self.assertIn('data.State = "ОТСТАЁТ"', ui)
         self.assertIn('psi.EnvironmentVariables["GIT_OPTIONAL_LOCKS"] = "1"', ui)
+
+
+    def test_docker_snapshot_is_explicit_dated_and_not_live(self):
+        ui = (ROOT / 'Mirror-Status.UI.cs').read_text(encoding='utf-8-sig')
+        for text in ('Снимок Docker', 'Windows: изменения', 'Docker: изменения',
+                     'Нет данных', 'старый', 'dockerSnapshotUtc',
+                     'ParseDockerSnapshot', 'TryLoadDockerCache',
+                     'FORTIS_DOCKER_STATUS_V1', 'ImportDockerSnapshot',
+                     'DateTime.UtcNow', 'FortisGitMirror'):
+            self.assertIn(text, ui)
+        self.assertNotIn('http://localhost:', ui)
+        exporter = (ROOT / 'tools/Export-Docker-Mirror-Status.py').read_text()
+        self.assertIn('status", "--porcelain=v1", "--untracked-files=all', exporter)
+        self.assertIn('GIT_OPTIONAL_LOCKS', exporter)
+        self.assertIn('Workfiles/windows-docker-audit', exporter)
+
+    def test_copy_paths_and_single_repo_full_commit_guards(self):
+        ui = (ROOT / 'Mirror-Status.UI.cs').read_text(encoding='utf-8-sig')
+        for text in ('Копировать пути', 'CopyPaths()', 'Clipboard.SetText',
+                     'Коммит всего (Windows)', 'git add -A', 'git commit',
+                     'CanCommitAll', 'LocalFull == RemoteFull',
+                     'list.SelectedItems.Count != 1', 'BeginCommitAll()',
+                     'MessageBoxDefaultButton.Button2', 'GitWrite(row.Path, "add -A")',
+                     'commit -m ', 'Push не выполняется', 'writing = true',
+                     'if (writing)', 'git status'):
+            self.assertIn(text, ui)
+        self.assertNotIn('git push origin main', ui)
+        self.assertNotIn('reset --hard', ui)
+
+    def test_exporter_produces_parseable_read_only_docker_status(self):
+        import importlib.util
+        import subprocess
+        import tempfile
+        import datetime
+        import os
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder) / 'Repos'
+            repo = root / 'sample'
+            repo.mkdir(parents=True)
+            def git(*args):
+                subprocess.run(['git', '-C', str(repo), *args], check=True,
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            git('init', '-q')
+            git('-c', 'user.name=Unit Test', '-c', 'user.email=unit@example.com',
+                'commit', '--allow-empty', '-qm', 'init')
+            (repo / 'new.txt').write_text('untracked')
+            module = ROOT / 'tools/Export-Docker-Mirror-Status.py'
+            spec = importlib.util.spec_from_file_location('docker_status_export', module)
+            instance = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(instance)
+            output = Path(folder) / 'report.tsv'
+            now = datetime.datetime.now(datetime.timezone.utc)
+            records = instance.export(root, output, now)
+            self.assertEqual(len(records), 1)
+            self.assertEqual(records[0][0], 'sample')
+            self.assertEqual(records[0][2], 1)
+            lines = output.read_text().splitlines()
+            self.assertEqual(lines[0].split('\t')[0], 'FORTIS_DOCKER_STATUS_V1')
+            self.assertEqual(len(lines[1].split('\t')[1]), 40)
+
+
+    def test_safe_windows_mirror_reconciliation_is_owner_explicit(self):
+        script = (ROOT / 'tools/Sync-Windows-Verified-Mirrors.ps1').read_text(encoding='utf-8')
+        for value in ('param([switch]$Apply)', 'if (-not $Apply)', 'stash push --include-untracked',
+                      'fetch --no-tags --no-recurse-submodules origin main',
+                      'merge --ff-only', 'FETCH_HEAD', 'originPattern',
+                      'core.hooksPath=/dev/null', 'Get-GitValue', 'GIT_TERMINAL_PROMPT'):
+            self.assertIn(value, script)
+        self.assertNotIn('stash drop', script.lower().split('param([switch]$Apply)')[-1].split('Write-Host')[0])
+        self.assertNotIn('reset --hard', script)
+        self.assertNotIn('git.exe push', script)
+        self.assertNotIn('git.exe clean', script)
+        # Explicitly excluded projects are not in the target table.
+        targets = script.split('$targets = @(', 1)[1].split('function Get-GitValue', 1)[0]
+        for forbidden in ('obs-planning-docs', 'rd-graphs', 'security'):
+            self.assertNotIn(forbidden, targets)
 
     def test_original_cli_report_kept(self):
         report = (ROOT / 'Mirror-Status.Report.ps1').read_text(encoding='utf-8')

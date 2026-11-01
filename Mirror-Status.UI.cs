@@ -1,8 +1,10 @@
 ﻿// Windows Forms Git mirror inspector for Windows PowerShell 5.1.
-// Inspection never updates clones; selected manual pull is guarded and fast-forward-only.
+// Checks and Docker snapshot imports are read-only for Git clones.
+// Explicit selected pull and selected Windows commit-all are guarded worktree writes.
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Globalization;
 using System.Drawing;
 using System.IO;
 using System.Text;
@@ -16,6 +18,10 @@ namespace FortisMirror {
     internal bool IsGit;
     internal ListViewItem Item;
     internal CheckResult Last;
+  }
+  internal sealed class DockerState {
+    internal string Head;
+    internal int Changed;
   }
   internal sealed class GitResult {
     internal bool Ok;
@@ -37,6 +43,12 @@ namespace FortisMirror {
     internal string Behind = "—";
     internal int BehindCount = -1;
     internal int AheadCount = -1;
+    internal bool CanCommitAll {
+      get {
+        return State == "АКТУАЛЕН" && Branch == "main" && Changes == "Да" &&
+          Regex.IsMatch(LocalFull, @"^[0-9a-fA-F]{40}$") && LocalFull == RemoteFull;
+      }
+    }
     internal bool CanPull {
       get {
         return State == "ОТСТАЁТ" && BehindCount > 0 && AheadCount == 0 &&
@@ -53,6 +65,12 @@ namespace FortisMirror {
     private readonly Button checkSelected = MakeButton("Проверить выбранные", 195);
     private readonly Button checkAll = MakeButton("Проверить все", 135);
     private readonly Button pullOne = MakeButton("Pull выбранного", 160);
+    private readonly Button copyPaths = MakeButton("Копировать пути", 160);
+    private readonly Button loadDocker = MakeButton("Снимок Docker", 155);
+    private readonly Button commitAll = MakeButton("Коммит всего (Windows)", 205);
+    private readonly Dictionary<string, DockerState> dockerStates = new Dictionary<string, DockerState>(StringComparer.OrdinalIgnoreCase);
+    private DateTime dockerSnapshotUtc = DateTime.MinValue;
+    private readonly string dockerCachePath;
     private readonly Button refresh = MakeButton("Обновить список", 150);
     private readonly Button cancel = MakeButton("Отмена проверки", 155);
     private readonly Label progress = new Label();
@@ -60,12 +78,15 @@ namespace FortisMirror {
     private CancellationTokenSource current;
     private bool running;
     private bool pulling;
+    private bool writing;
 
     public MirrorWindow(string mirrorRoot, string gitPath) {
       root = Path.GetFullPath(mirrorRoot);
       gitExe = gitPath;
+      dockerCachePath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "FortisGitMirror", "docker-status.tsv");
       Text = "Fortis — Windows Git-зеркало";
-      Size = new Size(1190, 705);
+      Size = new Size(1310, 745);
       MinimumSize = new Size(950, 520);
       StartPosition = FormStartPosition.CenterScreen;
       Font = new Font("Segoe UI", 9.5f);
@@ -73,9 +94,9 @@ namespace FortisMirror {
       ForeColor = Color.FromArgb(230, 239, 248);
 
       var layout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3, Padding = new Padding(12) };
-      layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 113));
+      layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 148));
       layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-      layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 155));
+      layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 175));
       Controls.Add(layout);
 
       var header = new Panel { Dock = DockStyle.Fill };
@@ -88,10 +109,11 @@ namespace FortisMirror {
         AutoEllipsis = true, ForeColor = Color.FromArgb(161, 183, 210)
       };
       var actions = new FlowLayoutPanel {
-        Dock = DockStyle.Bottom, Height = 46, WrapContents = false,
+        Dock = DockStyle.Bottom, Height = 80, WrapContents = true,
         FlowDirection = FlowDirection.LeftToRight, AutoScroll = true
       };
-      foreach (Button b in new Button[] { checkSelected, checkAll, pullOne, refresh, cancel }) actions.Controls.Add(b);
+      foreach (Button b in new Button[] { checkSelected, checkAll, pullOne, copyPaths,
+        loadDocker, commitAll, refresh, cancel }) actions.Controls.Add(b);
       cancel.Enabled = false;
       // Dock order: controls added bottom-to-top.
       header.Controls.Add(actions);
@@ -113,9 +135,10 @@ namespace FortisMirror {
       list.Columns.Add("Локальный main", 105);
       list.Columns.Add("GitHub SHA", 105);
       list.Columns.Add("Ветка", 100);
-      list.Columns.Add("Изменения", 95);
+      list.Columns.Add("Windows: изменения", 140);
       list.Columns.Add("Отстаёт на", 98);
       list.Columns.Add("Последний локальный коммит", 310);
+      list.Columns.Add("Docker: изменения", 140);
       layout.Controls.Add(list, 0, 1);
 
       var footer = new Panel { Dock = DockStyle.Fill };
@@ -134,19 +157,290 @@ namespace FortisMirror {
       checkSelected.Click += delegate { BeginCheck(false); };
       checkAll.Click += delegate { BeginCheck(true); };
       pullOne.Click += delegate { BeginPull(); };
+      copyPaths.Click += delegate { CopyPaths(); };
+      loadDocker.Click += delegate { ImportDockerSnapshot(); };
+      commitAll.Click += delegate { BeginCommitAll(); };
       refresh.Click += delegate { RefreshList(); };
       cancel.Click += delegate { if (current != null) current.Cancel(); };
       list.SelectedIndexChanged += delegate { ShowSelection(); };
       list.DoubleClick += delegate { BeginCheck(false); };
       FormClosing += delegate(object sender, FormClosingEventArgs e) {
-        if (pulling) {
+        if (writing) {
           e.Cancel = true;
-          MessageBox.Show(this, "Git pull ещё выполняется. Дождитесь результата; прерывать обновление файлов опасно.",
+          MessageBox.Show(this, "Операция Git ещё выполняется. Завершите её перед закрытием окна.",
             "Идёт обновление", MessageBoxButtons.OK, MessageBoxIcon.Warning);
         } else if (current != null) current.Cancel();
       };
-      Shown += delegate { RefreshList(); };
+      Shown += delegate { TryLoadDockerCache(); RefreshList(); };
       SetButtons();
+    }
+
+
+    private string DockerLabel(string name) {
+      DockerState state;
+      if (!dockerStates.TryGetValue(name, out state)) return "Нет данных";
+      string label = state.Changed < 0 ? "Ошибка снимка" :
+        state.Changed == 0 ? "Нет" : "Есть: " + state.Changed;
+      if (dockerSnapshotUtc == DateTime.MinValue ||
+          DateTime.UtcNow - dockerSnapshotUtc > TimeSpan.FromHours(24))
+        label += " (старый)";
+      foreach (RepoRow row in repositories) {
+        if (!String.Equals(row.Item.Text, name, StringComparison.OrdinalIgnoreCase)) continue;
+        if (row.Last != null && Regex.IsMatch(row.Last.RemoteFull, @"^[0-9a-f]{40}$") &&
+            !String.Equals(state.Head, row.Last.RemoteFull, StringComparison.OrdinalIgnoreCase))
+          label += " | SHA≠GH";
+        break;
+      }
+      return label;
+    }
+
+    private string DockerDescription(RepoRow row) {
+      DockerState state;
+      if (!dockerStates.TryGetValue(row.Item.Text, out state))
+        return "Docker: нет данных. Загрузите снимок из Docker; живого подключения нет.";
+      string stamp = dockerSnapshotUtc.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture) + " UTC";
+      string comparison = "";
+      if (row.Last != null && Regex.IsMatch(row.Last.RemoteFull, @"^[0-9a-f]{40}$")) {
+        comparison = String.Equals(state.Head, row.Last.RemoteFull, StringComparison.OrdinalIgnoreCase) ?
+          " | Docker HEAD = GitHub main" :
+          " | Docker HEAD отличается от GitHub main (направление неизвестно)";
+      }
+      return "Docker: " + DockerLabel(row.Item.Text) + " | снимок " + stamp +
+        " | HEAD: " + state.Head + comparison + Environment.NewLine +
+        "Статус Docker — не живой. После новой работы создайте и загрузите новый снимок.";
+    }
+
+    private bool ParseDockerSnapshot(string path, out DateTime stamp,
+      out Dictionary<string, DockerState> states) {
+      states = new Dictionary<string, DockerState>(StringComparer.OrdinalIgnoreCase);
+      stamp = DateTime.MinValue;
+      try {
+        var info = new FileInfo(path);
+        if (!info.Exists || info.Length > 1048576) return false;
+        string[] lines = File.ReadAllLines(path, Encoding.UTF8);
+        if (lines.Length < 2 || lines.Length > 2000) return false;
+        string[] head = lines[0].TrimStart('\uFEFF').Split('\t');
+        if (head.Length != 2 || head[0] != "FORTIS_DOCKER_STATUS_V1" ||
+          !DateTime.TryParseExact(head[1], "yyyy-MM-ddTHH:mm:ssZ",
+            CultureInfo.InvariantCulture,
+            DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out stamp))
+          return false;
+        if (stamp > DateTime.UtcNow.AddMinutes(10)) return false;
+        for (int i = 1; i < lines.Length; i++) {
+          if (lines[i].Length == 0) continue;
+          string[] parts = lines[i].Split('\t');
+          int count;
+          if (parts.Length != 3 ||
+            !Regex.IsMatch(parts[0], @"^[A-Za-z0-9_.-]{1,120}$") ||
+            !Regex.IsMatch(parts[1], @"^[0-9a-f]{40}$") ||
+            !Int32.TryParse(parts[2], out count) || count < -1 ||
+            states.ContainsKey(parts[0])) return false;
+          states.Add(parts[0], new DockerState { Head = parts[1], Changed = count });
+        }
+        return states.Count > 0;
+      } catch (IOException) { return false; }
+      catch (UnauthorizedAccessException) { return false; }
+    }
+
+    private void TryLoadDockerCache() {
+      DateTime stamp;
+      Dictionary<string, DockerState> states;
+      if (ParseDockerSnapshot(dockerCachePath, out stamp, out states)) {
+        dockerSnapshotUtc = stamp;
+        dockerStates.Clear();
+        foreach (var entry in states) dockerStates.Add(entry.Key, entry.Value);
+      }
+    }
+
+    private void ImportDockerSnapshot() {
+      if (running) return;
+      using (var dialog = new OpenFileDialog()) {
+        dialog.Title = "Выбрать снимок Docker (не живое подключение)";
+        dialog.Filter = "Fortis Docker TSV (*.tsv)|*.tsv|Все файлы (*.*)|*.*";
+        if (dialog.ShowDialog(this) != DialogResult.OK) return;
+        DateTime stamp;
+        Dictionary<string, DockerState> states;
+        if (!ParseDockerSnapshot(dialog.FileName, out stamp, out states)) {
+          MessageBox.Show(this, "Неверный формат снимка или повреждённый файл.",
+            "Снимок Docker", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+          return;
+        }
+        // Cache is outside Git repositories; no source checkout is modified.
+        try {
+          Directory.CreateDirectory(Path.GetDirectoryName(dockerCachePath));
+          if (!String.Equals(Path.GetFullPath(dialog.FileName),
+            Path.GetFullPath(dockerCachePath), StringComparison.OrdinalIgnoreCase))
+            File.Copy(dialog.FileName, dockerCachePath, true);
+        } catch (Exception) {
+          MessageBox.Show(this, "Снимок загружен только на текущий сеанс: не удалось сохранить кеш.",
+            "Снимок Docker", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+        dockerSnapshotUtc = stamp;
+        dockerStates.Clear();
+        foreach (var entry in states) dockerStates.Add(entry.Key, entry.Value);
+        foreach (RepoRow row in repositories)
+          row.Item.SubItems[8].Text = DockerLabel(row.Item.Text);
+        ShowSelection();
+        progress.Text = "Docker: импортирован снимок " +
+          stamp.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture) + " UTC; это не живой статус.";
+      }
+    }
+
+    private void CopyPaths() {
+      if (list.SelectedItems.Count != 1) return;
+      RepoRow row = (RepoRow)list.SelectedItems[0].Tag;
+      string value = "Репозиторий: " + row.Item.Text + Environment.NewLine +
+        "Windows: " + row.Path + Environment.NewLine +
+        "Docker (предполагаемый путь): /workspace/repo/Repos/" + row.Item.Text +
+        Environment.NewLine +
+        "Docker-путь нужно подтвердить в контейнере; имя GitHub-репозитория может отличаться.";
+      try {
+        Clipboard.SetText(value);
+        progress.Text = "Пути скопированы: " + row.Item.Text;
+      } catch (System.Runtime.InteropServices.ExternalException) {
+        progress.Text = "Не удалось записать пути в буфер обмена.";
+      }
+    }
+
+    private string PromptCommitMessage() {
+      using (var prompt = new Form()) {
+        prompt.Text = "Коммит всего — только Windows";
+        prompt.Size = new Size(605, 245);
+        prompt.FormBorderStyle = FormBorderStyle.FixedDialog;
+        prompt.MinimizeBox = false; prompt.MaximizeBox = false;
+        prompt.StartPosition = FormStartPosition.CenterParent;
+        prompt.Font = new Font("Segoe UI", 10f);
+        var label = new Label {
+          Left = 16, Top = 15, Width = 558, Height = 65,
+          Text = "git add -A и git commit выполняются в WINDOWS-клоне.\n" +
+            "Это исключение из схемы Docker → GitHub → Windows.\n" +
+            "Все файлы, не исключённые .gitignore, попадут в коммит. Push не выполняется."
+        };
+        var input = new TextBox { Left = 16, Top = 89, Width = 552, MaxLength = 160 };
+        var ok = new Button { Text = "Далее", Left = 358, Top = 126, Width = 100,
+          DialogResult = DialogResult.OK };
+        var no = new Button { Text = "Отмена", Left = 468, Top = 126, Width = 100,
+          DialogResult = DialogResult.Cancel };
+        prompt.Controls.Add(label); prompt.Controls.Add(input);
+        prompt.Controls.Add(ok); prompt.Controls.Add(no);
+        prompt.AcceptButton = ok; prompt.CancelButton = no;
+        if (prompt.ShowDialog(this) != DialogResult.OK) return null;
+        string message = input.Text.Trim();
+        if (message.Length < 3 || message.IndexOfAny(new char[] { '\r', '\n', '"', '\\' }) >= 0) {
+          MessageBox.Show(this, "Название: 3–160 символов, без кавычек, обратных слешей и переводов строк.");
+          return null;
+        }
+        return message;
+      }
+    }
+
+    private void BeginCommitAll() {
+      if (running || list.SelectedItems.Count != 1) return;
+      RepoRow row = (RepoRow)list.SelectedItems[0].Tag;
+      CheckResult expected = row.Last;
+      if (!row.IsGit || expected == null || !expected.CanCommitAll) return;
+      string message = PromptCommitMessage();
+      if (message == null) return;
+      string question = "Выполнить в WINDOWS-клоне " + row.Path + ":\n\n" +
+        "git add -A\n" + "git commit -m " + message + "\n\n" +
+        "Будут включены ВСЕ отслеживаемые изменения и новые файлы, не попавшие в .gitignore.\n" +
+        "Это НЕ Docker-клон. Коммит останется только локально, Push не произойдёт.\n" +
+        "Проверьте отсутствие секретов и нежелательных файлов. Продолжить?";
+      if (MessageBox.Show(this, question, "Подтвердить коммит всех Windows-файлов",
+        MessageBoxButtons.YesNo, MessageBoxIcon.Warning,
+        MessageBoxDefaultButton.Button2) != DialogResult.Yes) return;
+      running = true; writing = true;
+      current = new CancellationTokenSource();
+      progress.Text = "Проверка перед Windows-коммитом: " + row.Item.Text;
+      SetButtons();
+      ThreadPool.QueueUserWorkItem(delegate {
+        GitResult stage = null, commit = null;
+        CheckResult after = null;
+        string blocked = null;
+        try {
+          CheckResult fresh = CheckRepository(row.Path, CancellationToken.None);
+          if (!fresh.CanCommitAll || fresh.LocalFull != expected.LocalFull ||
+              fresh.RemoteFull != expected.RemoteFull || fresh.Branch != expected.Branch)
+            blocked = "Репозиторий изменился или не прошёл повторную проверку. Коммит не выполнен.";
+          else {
+            Ui(delegate { progress.Text = "Git add -A: " + row.Item.Text; });
+            stage = GitWrite(row.Path, "add -A");
+            if (stage.Ok) {
+              Ui(delegate { progress.Text = "Git commit: " + row.Item.Text; });
+              commit = GitWrite(row.Path,
+                "-c core.hooksPath=/dev/null -c commit.gpgsign=false commit -m " + Quote(message));
+            }
+          }
+          after = CheckRepository(row.Path, CancellationToken.None);
+        } catch (Exception) {
+          blocked = "Неожиданная ошибка при коммите. Проверьте состояние Git вручную.";
+        }
+        GitResult staged = stage, committed = commit;
+        string reason = blocked;
+        CheckResult checkedState = after;
+        Ui(delegate {
+          if (checkedState != null) {
+            row.Last = checkedState;
+            row.Item.SubItems[1].Text = checkedState.State;
+            row.Item.SubItems[2].Text = checkedState.Local;
+            row.Item.SubItems[3].Text = checkedState.Remote;
+            row.Item.SubItems[4].Text = checkedState.Branch;
+            row.Item.SubItems[5].Text = checkedState.Changes;
+            row.Item.SubItems[6].Text = checkedState.Behind;
+            row.Item.SubItems[7].Text = checkedState.Commit;
+            row.Item.SubItems[8].Text = DockerLabel(row.Item.Text);
+            row.Item.ForeColor = checkedState.State == "АКТУАЛЕН" &&
+              checkedState.Branch == "main" && checkedState.Changes == "Нет" ?
+              Color.FromArgb(116, 215, 169) : Color.FromArgb(255, 195, 117);
+          }
+          running = false; writing = false;
+          ShowSelection();
+          bool ok = reason == null && committed != null && committed.Ok;
+          string result = reason != null ? reason :
+            staged == null ? "Git add -A не запускался." :
+            !staged.Ok ? "Git add -A не удался; рабочие файлы сохранены." :
+            committed == null || !committed.Ok ?
+              "Файлы могли остаться в stage: git commit не удался. Проверьте git status." :
+              "Коммит создан в Windows-клоне. Push не выполнялся; для обычного зеркала это исключение.";
+          progress.Text = result;
+          MessageBox.Show(this, result, ok ? "Коммит создан" : "Ошибка коммита",
+            MessageBoxButtons.OK, ok ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
+        });
+      });
+    }
+
+    private GitResult GitWrite(string repo, string args) {
+      var result = new GitResult { Output = "" };
+      try {
+        using (var proc = new Process()) {
+          var psi = proc.StartInfo;
+          psi.FileName = gitExe;
+          psi.Arguments = "-c core.fsmonitor=false -C " + Quote(repo) + " " + args;
+          psi.UseShellExecute = false;
+          psi.CreateNoWindow = true;
+          psi.RedirectStandardOutput = true;
+          psi.RedirectStandardError = true;
+          psi.EnvironmentVariables["GIT_TERMINAL_PROMPT"] = "0";
+          psi.EnvironmentVariables["GCM_INTERACTIVE"] = "never";
+          psi.EnvironmentVariables["GIT_OPTIONAL_LOCKS"] = "1";
+          var errors = new StringBuilder();
+          object gate = new object();
+          proc.OutputDataReceived += delegate(object sender, DataReceivedEventArgs e) { };
+          proc.ErrorDataReceived += delegate(object sender, DataReceivedEventArgs e) {
+            if (e.Data != null) lock (gate) {
+              if (errors.Length < 4096) errors.AppendLine(e.Data);
+            }
+          };
+          proc.Start();
+          proc.BeginOutputReadLine();
+          proc.BeginErrorReadLine();
+          proc.WaitForExit();
+          result.ExitCode = proc.ExitCode;
+          result.Ok = proc.ExitCode == 0;
+          lock (gate) result.Failure = ClassifyGitError(errors.ToString());
+        }
+      } catch (Exception) { result.Ok = false; }
+      return result;
     }
 
     private static Button MakeButton(string text, int width) {
@@ -167,8 +461,13 @@ namespace FortisMirror {
       pullOne.Enabled = !running && list.SelectedItems.Count == 1 &&
         ((RepoRow)list.SelectedItems[0].Tag).Last != null &&
         ((RepoRow)list.SelectedItems[0].Tag).Last.CanPull;
+      commitAll.Enabled = !running && list.SelectedItems.Count == 1 &&
+        ((RepoRow)list.SelectedItems[0].Tag).Last != null &&
+        ((RepoRow)list.SelectedItems[0].Tag).Last.CanCommitAll;
+      copyPaths.Enabled = !running && list.SelectedItems.Count == 1;
+      loadDocker.Enabled = !running;
       refresh.Enabled = !running;
-      cancel.Enabled = running && !pulling;
+      cancel.Enabled = running && !writing;
     }
 
     private void ShowSelection() {
@@ -176,16 +475,18 @@ namespace FortisMirror {
         RepoRow selected = (RepoRow)list.SelectedItems[0].Tag;
         if (selected.Last == null) {
           detail.Text = selected.Path + Environment.NewLine +
-            "Коммиты не проверены. Проверка может загрузить историю в .git, но не изменяет рабочие файлы.";
+            "Windows: не проверено." + Environment.NewLine + DockerDescription(selected);
         } else {
           CheckResult v = selected.Last;
-          detail.Text = selected.Path + Environment.NewLine +
+          detail.Text = selected.Path + Environment.NewLine + DockerDescription(selected) + Environment.NewLine +
+            "Windows: " + v.Changes + Environment.NewLine +
             "Локальный main: " + (v.LocalFull.Length > 0 ? v.LocalFull : "неизвестен") + Environment.NewLine +
             "Последний локальный коммит: " + v.Commit + Environment.NewLine +
             "GitHub main: " + (v.RemoteFull.Length > 0 ? v.RemoteFull : "неизвестен") + Environment.NewLine +
             "Коммитов позади: " + v.Behind +
             (v.AheadCount > 0 ? "  |  Локальных коммитов сверх общего предка: " + v.AheadCount : "") +
-            (v.CanPull ? "   |   Pull доступен с подтверждением" : "   |   Pull заблокирован");
+            (v.CanPull ? "   |   Pull доступен с подтверждением" : "   |   Pull заблокирован") +
+            (v.CanCommitAll ? "   |   Коммит всех Windows-изменений доступен" : "");
         }
       } else if (list.SelectedItems.Count > 1) {
         int gitCount = 0;
@@ -223,6 +524,7 @@ namespace FortisMirror {
           item.SubItems.Add("—"); item.SubItems.Add("—");
           item.SubItems.Add("—"); item.SubItems.Add("—");
           item.SubItems.Add("—"); item.SubItems.Add("—");
+          item.SubItems.Add(DockerLabel(info.Name));
           if (!git) item.ForeColor = Color.FromArgb(131, 153, 176);
           var row = new RepoRow { Path = folder, IsGit = git, Item = item };
           item.Tag = row;
@@ -232,7 +534,7 @@ namespace FortisMirror {
         int count = repositories.FindAll(delegate(RepoRow r) { return r.IsGit; }).Count;
         progress.Text = "Найдено Git-клонов: " + count + "  |  Всего папок: " + repositories.Count +
           "  |  Сетевая проверка не запускалась.";
-        detail.Text = "Проверка сравнивает main с GitHub и при необходимости загружает историю Git в .git; рабочие файлы не меняет.";
+        detail.Text = "Windows проверяется по Git. Docker показывается только по вручную загруженному датированному снимку.";
       } catch (Exception ex) {
         progress.Text = "Ошибка чтения зеркальной папки.";
         detail.Text = ex.Message;
@@ -287,6 +589,7 @@ namespace FortisMirror {
             row.Item.SubItems[5].Text = result.Changes;
             row.Item.SubItems[6].Text = result.Behind;
             row.Item.SubItems[7].Text = result.Commit;
+            row.Item.SubItems[8].Text = DockerLabel(row.Item.Text);
             row.Item.ForeColor = result.State == "АКТУАЛЕН" && result.Branch == "main" && result.Changes == "Нет" ?
               Color.FromArgb(116, 215, 169) : Color.FromArgb(255, 195, 117);
             progress.Text = "Проверено: " + finished + " / " + targets.Count;
@@ -333,6 +636,7 @@ namespace FortisMirror {
         MessageBoxDefaultButton.Button2) != DialogResult.Yes) return;
       running = true;
       pulling = true;
+      writing = true;
       current = new CancellationTokenSource();
       progress.Text = "Повторная проверка " + row.Item.Text + " перед обновлением...";
       SetButtons();
@@ -370,12 +674,14 @@ namespace FortisMirror {
             row.Item.SubItems[5].Text = checkedState.Changes;
             row.Item.SubItems[6].Text = checkedState.Behind;
             row.Item.SubItems[7].Text = checkedState.Commit;
+            row.Item.SubItems[8].Text = DockerLabel(row.Item.Text);
             row.Item.ForeColor = checkedState.State == "АКТУАЛЕН" &&
               checkedState.Branch == "main" && checkedState.Changes == "Нет" ?
               Color.FromArgb(116, 215, 169) : Color.FromArgb(255, 195, 117);
           }
           running = false;
           pulling = false;
+          writing = false;
           ShowSelection();
           bool ok = reason == null && result != null && result.Ok;
           string message = reason != null ? reason :
@@ -413,7 +719,7 @@ namespace FortisMirror {
           psi.EnvironmentVariables["GIT_TERMINAL_PROMPT"] = "0";
           psi.EnvironmentVariables["GCM_INTERACTIVE"] = "never";
           psi.EnvironmentVariables["GIT_SSH_COMMAND"] = "ssh -o BatchMode=yes -o ConnectTimeout=8";
-          // A write needs Git locks even if the parent process configured read-only Git.
+          // A worktree update needs Git locks even if read-only checks use optional locks disabled.
           psi.EnvironmentVariables["GIT_OPTIONAL_LOCKS"] = "1";
           var errors = new StringBuilder();
           object gate = new object();
