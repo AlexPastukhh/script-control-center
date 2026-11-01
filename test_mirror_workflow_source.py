@@ -33,6 +33,39 @@ class WorkflowSource(unittest.TestCase):
         self.assertIn("if ($Cli)", source)
         self.assertIn("Add-Type -Path $source", source)
 
+    def test_branch_picker_active_branch_is_noop_and_menu_disposal_deferred(self):
+        source = CSharp.read_text(encoding="utf-8")
+        self.assertIn("if ((isDocker ? r.DockerActive : r.WindowsActive) == target) return;", source)
+        self.assertIn("if ((isDocker ? r.DockerView : r.WindowsView) == target) return;", source)
+        self.assertIn("BeginSwitch(r, isDocker, target);", source)
+        self.assertNotIn("menu.Closed += delegate { menu.Dispose(); };", source)
+        self.assertRegex(source,
+                         r"menu\.Closed \+= delegate \{[\s\S]*?BeginInvoke"
+                         r"\(\(MethodInvoker\)delegate \{[\s\S]*?menu\.Dispose\(\)")
+
+    def test_check_updates_one_completed_row_and_preserves_prior_results(self):
+        source = CSharp.read_text(encoding="utf-8")
+        start = source.index("private void BeginCheck(bool all)")
+        end = source.index("private bool CanPull", start)
+        code = source[start:end]
+        self.assertIn("ApplyCheckedRow(complete)", code)
+        self.assertIn("ProbeGithub(r, token);", code)
+        self.assertIn("ProbeWindows(r, token);", code)
+        self.assertIn("ProbeDockerCounts(new List<WfRepo> { r }, token)", code)
+        self.assertLess(code.index("ProbeGithub(r, token);"),
+                        code.index("ProbeWindows(r, token);"))
+        self.assertLess(code.index("ProbeWindows(r, token);"),
+                        code.index("ProbeDockerCounts(new List<WfRepo> { r }, token)"))
+        self.assertLess(code.index("ProbeDockerCounts(new List<WfRepo> { r }, token)"),
+                        code.index("ApplyCheckedRow(complete)"))
+        self.assertNotIn("repos.Clear()", code)
+        self.assertNotIn("DrawTable(previous)", code)
+        self.assertIn("if (fresh.Get(old.DockerView) != null)", source)
+        self.assertIn("if (fresh.Get(old.WindowsView) != null)", source)
+        self.assertIn("fresh.Item.Tag = fresh;", source)
+        self.assertIn("Результаты обновлялись построчно", code)
+        self.assertIn("if (token.IsCancellationRequested) break;", code)
+
     def test_windows_powershell_51_thread_ctor_is_unambiguous(self):
         source = CSharp.read_text(encoding="utf-8")
         self.assertIn("Thread window = new Thread(new ThreadStart(delegate() {", source)
@@ -66,7 +99,8 @@ class WorkflowSource(unittest.TestCase):
         self.assertNotIn("Directory.GetDirectories(root)", source)
         self.assertIn("if (isDocker) r.DockerView = target;", source)
         self.assertIn("else r.WindowsView = target;", source)
-        self.assertIn("else BeginSwitch(r, isDocker, target);", source)
+        self.assertIn("BeginSwitch(r, isDocker, target);", source)
+        self.assertIn("if ((isDocker ? r.DockerActive : r.WindowsActive) == target) return;", source)
         self.assertIn("WfBranch d = r.Get(r.DockerActive), w = r.Get(r.WindowsActive);", source)
         self.assertIn("string[] overall = Overall(r);", source)
         self.assertIn("Sha.IsMatch(b.GithubSha)", source)

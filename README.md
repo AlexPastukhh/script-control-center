@@ -145,8 +145,15 @@ exact counts, without changing worktree files or its checked-out branch.
 
 **Operating behavior:** opening the window reads the Docker inventory only;
 remote GitHub/Windows checks require `Проверить выбранные` or `Проверить все`.
-Checks execute off the UI thread and can be cancelled. Docker read-only
-export never fetches, pushes or changes a worktree. The owner-only actions are:
+Checks execute off the UI thread and can be cancelled. Status and row
+contents refresh **after each repository completes** (GitHub, Windows and the
+Docker ancestry check), showing `Проверяется N из M` / `Проверено N из M`
+during the run instead of waiting for the final repository. On cancellation,
+already completed rows remain visible; unprocessed rows retain their previous
+state. Choosing the already-active branch in either `Активная ветка` selector
+is a no-op with no Git call. The branch-menu cleanup is deferred until after
+its WinForms close/click handlers return. Docker read-only export never
+fetches, pushes or changes a worktree. The owner-only actions are:
 
 - `Pull Windows` only for one verified clean Windows clone, the currently
   active **and viewed** Windows branch, approved Docker/Windows origin, and

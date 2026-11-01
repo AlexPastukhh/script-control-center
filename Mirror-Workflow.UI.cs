@@ -678,14 +678,31 @@ namespace FortisMirror {
         string target = name;
         entry.Click += delegate {
           if (isView) {
+            // Re-selecting the viewed branch is a pure no-op.
+            if ((isDocker ? r.DockerView : r.WindowsView) == target) return;
             if (isDocker) r.DockerView = target;
             else r.WindowsView = target;
             RefreshRow(r);
-          } else BeginSwitch(r, isDocker, target);
+          } else {
+            // The already-active branch must NEVER trigger Git switch.
+            if ((isDocker ? r.DockerActive : r.WindowsActive) == target) return;
+            BeginSwitch(r, isDocker, target);
+          }
         };
         menu.Items.Add(entry);
       }
-      menu.Closed += delegate { menu.Dispose(); };
+      // Disposing a ContextMenuStrip synchronously from Closed can destroy
+      // its ToolStrip items while the click/close event is still unwinding.
+      // Schedule disposal after Windows has finished processing that event.
+      menu.Closed += delegate {
+        if (!IsDisposed && IsHandleCreated) {
+          try {
+            BeginInvoke((MethodInvoker)delegate {
+              if (!menu.IsDisposed) menu.Dispose();
+            });
+          } catch (InvalidOperationException) { }
+        }
+      };
       menu.Show(list, e.Location);
     }
     private void CopyPaths() {
@@ -736,6 +753,21 @@ namespace FortisMirror {
         });
       });
     }
+    private void ApplyCheckedRow(WfRepo fresh) {
+      // Update one checked repository, never replace the entire table.
+      // The UI owns list/repo state; the worker relinquishes the completed
+      // WfRepo before posting this callback, so there are no concurrent edits.
+      WfRepo old = repos.Find(delegate(WfRepo r) {
+        return String.Equals(r.Name, fresh.Name, StringComparison.OrdinalIgnoreCase);
+      });
+      if (old == null || old.Item == null) return;
+      if (fresh.Get(old.DockerView) != null) fresh.DockerView = old.DockerView;
+      if (fresh.Get(old.WindowsView) != null) fresh.WindowsView = old.WindowsView;
+      fresh.Item = old.Item;
+      fresh.Item.Tag = fresh;
+      repos[repos.IndexOf(old)] = fresh;
+      RefreshRow(fresh);
+    }
     private void BeginCheck(bool all) {
       if (working) return;
       var names = new List<string>();
@@ -748,43 +780,61 @@ namespace FortisMirror {
       working = true; writing = false;
       cancellation = new CancellationTokenSource();
       CancellationToken token = cancellation.Token;
-      status.Text = "Docker/Windows/GitHub: проверка " + names.Count + " репозиториев...";
+      status.Text = "Получение списка Docker: 0 из " + names.Count + "...";
       Buttons();
       ThreadPool.QueueUserWorkItem(delegate {
-        var snap = Docker("--stdout", 90000, token);
-        List<WfRepo> found;
-        if (!snap.Ok || !ParseDocker(snap.Text, out found)) {
-          Ui(delegate { EndWork("Docker недоступен или некорректный ответ. Нет новых статусов."); });
-          return;
-        }
-        foreach (var r in found) {
-          if (token.IsCancellationRequested) break;
-          if (!names.Contains(r.Name)) continue;
-          ProbeGithub(r, token);
-          if (!token.IsCancellationRequested) ProbeWindows(r, token);
-        }
-        if (!token.IsCancellationRequested)
-          ProbeDockerCounts(found.FindAll(delegate(WfRepo r) { return names.Contains(r.Name); }), token);
-        Ui(delegate {
-          if (token.IsCancellationRequested) {
-            EndWork("Проверка отменена. Старые результаты оставлены без замены.");
+        try {
+          var snap = Docker("--stdout", 90000, token);
+          List<WfRepo> found;
+          if (!snap.Ok || !ParseDocker(snap.Text, out found)) {
+            Ui(delegate {
+              EndWork(token.IsCancellationRequested ? "Проверка отменена." :
+                "Docker недоступен или некорректный ответ. Старые строки сохранены.");
+            });
             return;
           }
-          string previous = Selected() == null ? null : Selected().Name;
-          foreach (var fresh in found) {
-            WfRepo old = repos.Find(delegate(WfRepo r) {
-              return String.Equals(r.Name, fresh.Name, StringComparison.OrdinalIgnoreCase);
+          int done = 0;
+          foreach (var r in found) {
+            if (token.IsCancellationRequested) break;
+            if (!names.Contains(r.Name)) continue;
+            int next = done + 1;
+            string checkingName = r.Name;
+            Ui(delegate {
+              if (working) status.Text = "Проверяется " + next + " из " +
+                names.Count + ": " + checkingName + " (GitHub / Windows / Docker)";
             });
-            if (old != null) {
-              if (fresh.Get(old.DockerView) != null) fresh.DockerView = old.DockerView;
-              if (fresh.Get(old.WindowsView) != null) fresh.WindowsView = old.WindowsView;
-            }
+            ProbeGithub(r, token);
+            if (token.IsCancellationRequested) break;
+            ProbeWindows(r, token);
+            if (token.IsCancellationRequested) break;
+            // Complete this single repo's exact Docker/GitHub ancestry before
+            // publishing its row; unknown history remains explicitly unknown.
+            ProbeDockerCounts(new List<WfRepo> { r }, token);
+            if (token.IsCancellationRequested) break;
+            done++;
+            WfRepo complete = r;
+            int completed = done;
+            Ui(delegate {
+              if (!working) return;
+              ApplyCheckedRow(complete);
+              status.Text = "Проверено " + completed + " из " + names.Count +
+                ": " + complete.Name;
+            });
           }
-          repos.Clear(); repos.AddRange(found);
-          DrawTable(previous);
-          EndWork("Проверено " + names.Count +
-            " репозиториев. У других строк статус может оставаться «Не проверен».");
-        });
+          int finalDone = done;
+          Ui(delegate {
+            EndWork(token.IsCancellationRequested ?
+              "Проверка отменена. Готовые строки сохранены: " + finalDone +
+              " из " + names.Count + "." :
+              "Проверка завершена: " + finalDone + " из " + names.Count +
+              ". Результаты обновлялись построчно.");
+          });
+        } catch (Exception) {
+          Ui(delegate {
+            EndWork("Ошибка проверки. Уже полученные строки сохранены; " +
+              "Pull и checkout выполняйте только после новой проверки.");
+          });
+        }
       });
     }
 
