@@ -1,6 +1,6 @@
 # Fortis / RDG bundle manifest
 
-## Worker files copied beside Control Center
+## Worker files in the Windows Git clone
 
 The catalog importer resolves these files relative to the folder containing
 `Start-ScriptCatalog.ps1` (the app's `$PSScriptRoot`):
@@ -8,7 +8,7 @@ The catalog importer resolves these files relative to the folder containing
 | Display name | Worker file | Role |
 |---|---|---|
 | Fortis Repo 2 | `Repo2-Worker.ps1` | Start guarded Repo 2 session |
-| Fortis Repo 1 | `Repo1-Worker.ps1` | Start Repo 1 independently via its own installed quiet launcher/guards |
+| Fortis Repo 1 | `Repo1-Worker.ps1` | Start Repo 1 using its Git-clone quiet launcher and Guard |
 | RDG Updater | `Updater-Worker.ps1` | Watch and apply an already-verified RDG build |
 | CI Watcher — запуск | `Watcher-Start.ps1` | Ensure the Docker CI watcher is running |
 | CI Watcher — остановка | `Watcher-Stop.ps1` | Stop only the matched CI watcher |
@@ -17,10 +17,9 @@ All five are registered in hidden/background mode with no arguments.
 Import only registers file paths; it never runs a worker or contacts Docker.
 Stable bundle IDs are stored in the catalog to prevent repeated imports.
 
-## External dependencies checked by the import preview
+## Historical dependency paths in the import preview
 
-These files are dependencies used by the worker scripts; they are not
-separately registered as catalog entries.
+The current import preview may still display these **pre-migration** Windows paths. They do **not** describe where the Git-clone Repo 1/2 workers load their launchers and shared Guard; those workers resolve `launchers/` from `$PSScriptRoot`. The RDG updater executable remains a separate Windows-local dependency. This table is preserved for diagnosis, not as the current launch contract.
 
 | Worker | Required Windows file |
 |---|---|
@@ -42,9 +41,7 @@ separately registered as catalog entries.
 - `CI Watcher — запуск` and `CI Watcher — остановка` are one-shot commands.
   The actual watcher is a Docker process, not a persistent Windows worker PID.
 
-The importer displays whether each required Windows file exists at import
-time. Docker/container health is deliberately checked only when the user
-explicitly launches the corresponding worker.
+The import preview checks historical dependency paths and may warn even when the new Git-clone worker path is correct. Docker/container health is checked only when the user explicitly launches a worker. On the owner's Windows machine the five entries are **already registered** with clone paths, so routine `git pull` does not require importing the bundle again.
 
 ## Git-clone source transition (2026-11-01)
 

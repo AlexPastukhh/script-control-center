@@ -1,20 +1,20 @@
 # Script Control Center
 
-Source for the **Windows Fortis / RDG Control Center** and its user-script catalog. The repository contains a **source-only candidate** imported from the Fortis Repo workspace on 2026-11-01; it is **not** evidence that the updated version is installed or verified on Windows.
+Source for the standalone **Windows script catalog** and an optional combined Fortis/RDG Control Center. On 2026-11-01 the owner confirmed that the standalone catalog opens from the Windows Git clone and that five built-in worker entries were re-pointed to that clone. This confirms the catalog UI, **not** a successful Repo 1/2 reconnection from the cloned launchers.
 
 ## What it does
 
-- `Start-ScriptCatalog.ps1` opens the independent script catalog UI (without starting the Fortis/RDG service cards).
-- `Start-ControlCenter.ps1` opens the combined Fortis/RDG Control Center and catalog.
+- **`Start-ScriptCatalog.ps1` is the primary application and Desktop shortcut target.** It opens the standalone catalog directly, without the old four-card shell.
+- `Start-ControlCenter.ps1` is the optional older combined four-card shell with a «Скрипты…» button. **It is not the primary Desktop shortcut target.**
 - `ScriptCatalog.cs` implements the script registration, status and log-view UI; `Script-Runner.ps1` runs supported registered commands in the configured mode.
 - The `Repo*-Worker.ps1`, `Updater-Worker.ps1`, and `Watcher-*.ps1` files are **Windows adapters**, not portable launchers or permission to change working infrastructure.
 - `BUNDLE-MANIFEST.md` documents the optional preset and external installed-file dependencies. Importing a preset is registration-only and does not launch the workers.
 
 ## Canonical Git-to-Windows source (transition)
 
-The intended workflow is **Docker Git checkout → commit/push → Windows clone fast-forward pull → manual acceptance → explicit run**. The Desktop shortcut should target `Start-ControlCenter.ps1` in the Windows Git clone, not `%LOCALAPPDATA%` copies. The bundled workers now use relative `launchers/` paths for Repo 1/2 and shared Fortis Guard. Runtime credentials and profiles stay local to Windows; the RDG updater itself is still an external dependency. Source checkout does **not** restart a live tunnel or prove cold-start compatibility.
+The intended workflow is **Docker Git checkout → commit/push → Windows clone fast-forward pull → manual acceptance → explicit run**. The Desktop `Fortis RDG Control Center.lnk` shortcut targets **`Start-ScriptCatalog.ps1`** in the Windows Git clone, not `Start-ControlCenter.ps1` or `%LOCALAPPDATA%` copies. The bundled workers now use relative `launchers/` paths for Repo 1/2 and shared Fortis Guard. Runtime credentials and profiles stay local to Windows; the RDG updater itself is still an external dependency. Source checkout does **not** restart a live tunnel or prove cold-start compatibility.
 
-See [Git-to-Windows operating procedure](docs/GIT-WINDOWS-SOURCE-OF-TRUTH.md) and `tools/Update-Windows-ControlCenter.ps1` (read-only preview by default). **After changing Docker**, update the corresponding resource/pin checks and verify both launchers before terminating the last working Fortis Repo connection. Repo 2 is not yet confirmed to reconnect using the cloned-source launcher.
+See [Git-to-Windows operating procedure](docs/GIT-WINDOWS-SOURCE-OF-TRUTH.md) and `tools/Update-Windows-ControlCenter.ps1` (read-only preview by default, explicit `-Apply` for guarded pull and shortcut repair). The five registered workers retain absolute paths to the stable Windows clone; **do not reimport them after each Git pull**. **After changing Docker**, update the corresponding resource/pin checks and verify both launchers before terminating the last working Fortis Repo connection. Repo 2 is not yet confirmed to reconnect using the cloned-source launcher.
 
 ## Зеркальная директория репозиториев (Docker ↔ Windows)
 
@@ -47,7 +47,15 @@ git -C $repo remote -v
 git -C $repo rev-parse HEAD
 ```
 
-Команда **только создаёт или проверяет клон**. Отдельная проверка и смена ярлыка — `tools/Update-Windows-ControlCenter.ps1` (`-Apply` только после просмотра его действий). Не удалять существующие другие репозитории из `Repos`; не путать Windows-клон с `/workspace/repo/Repos`.
+Команда **только создаёт или проверяет клон**. На текущей Windows-машине ярлык уже направлен на `Start-ScriptCatalog.ps1`, а пять регистраций обновлены до worker-файлов в клоне. Дальнейшее обновление после `git push`:
+
+```powershell
+$repo = Join-Path $env:USERPROFILE 'Repos\script-control-center'
+git -C $repo pull --ff-only origin main
+if ($LASTEXITCODE -ne 0) { throw 'Git pull не завершился успешно' }
+```
+
+Повторно создавать ярлык и импортировать штатный набор после обычного `pull` **не нужно**. Новые файлы используются при следующем запуске каталога или отдельного worker-процесса, уже работающие процессы не заменяются. `tools/Update-Windows-ControlCenter.ps1 -Apply` предназначен для отдельной предварительной проверки/восстановления ярлыка и **не требуется при каждом обновлении**. Не удалять другие репозитории из `Repos`; не путать Windows-клон с `/workspace/repo/Repos`.
 
 ## Requirements and verification
 
@@ -57,7 +65,7 @@ The UI requires **Windows PowerShell 5.1, Windows Forms and an STA thread**. It 
 python3 -B test_static_catalog.py
 ```
 
-On a **separate Windows test copy**, with explicit approval and without touching running Fortis/RDG sessions:
+For a **source-only Windows compilation test**, without touching running Fortis/RDG sessions:
 
 ```powershell
 powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File .\Test-ScriptCatalogCompile.ps1

@@ -60,6 +60,14 @@ class GitLauncherContract(unittest.TestCase):
             self.assertIn(digest, b)
             self.assertIn(b"$fortisControl = Join-Path $PSScriptRoot 'control.ps1'", b)
 
+    def test_primary_desktop_shortcut_is_standalone_catalog(self):
+        updater = content('tools/Update-Windows-ControlCenter.ps1')
+        self.assertIn(b"$target = Join-Path $repo 'Start-ScriptCatalog.ps1'", updater)
+        self.assertNotIn(b"$target = Join-Path $repo 'Start-ControlCenter.ps1'", updater)
+        self.assertIn(b"'Start-ScriptCatalog.ps1'", updater)
+        for doc in ['README.md', 'docs/GIT-WINDOWS-SOURCE-OF-TRUTH.md']:
+            self.assertIn('Start-ScriptCatalog.ps1', (ROOT / doc).read_text(encoding='utf-8'))
+
     def test_guard_bytes_are_not_normalized(self):
         self.assertIn('launchers/**/*.ps1 -text', (ROOT/'.gitattributes').read_text())
         for file in LAUNCHERS.rglob('*.ps1'):

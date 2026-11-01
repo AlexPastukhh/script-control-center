@@ -37,7 +37,7 @@ if ($Apply) {
     if (@(GitCommand @('status','--porcelain')).Count -ne 0) { throw 'Git checkout dirty after pull; shortcut unchanged.' }
 }
 $required = @(
-    'Start-ControlCenter.ps1','ControlCenter.cs','ScriptCatalog.cs',
+    'Start-ScriptCatalog.ps1','Start-ControlCenter.ps1','ControlCenter.cs','ScriptCatalog.cs',
     'Repo1-Worker.ps1','Repo2-Worker.ps1','Updater-Worker.ps1',
     'Watcher-Start.ps1','Watcher-Stop.ps1',
     'launchers\FortisRepoPlus2\Repo2DirectGuard.ps1',
@@ -101,7 +101,7 @@ if ($Apply) {
 Write-Host 'Note: WinForms and Repo 1/2 real reconnect NOT tested by this operation.'
 $desktop = [Environment]::GetFolderPath('Desktop')
 $link = Join-Path $desktop 'Fortis RDG Control Center.lnk'
-$target = Join-Path $repo 'Start-ControlCenter.ps1'
+$target = Join-Path $repo 'Start-ScriptCatalog.ps1'
 Write-Host "DESKTOP SHORTCUT: $link"
 Write-Host "TARGET SOURCE: $target"
 if (-not $Apply) {
@@ -121,7 +121,7 @@ $shortcut.TargetPath = $ps
 $shortcut.Arguments = '-NoProfile -STA -ExecutionPolicy Bypass -File "' + $target + '"'
 $shortcut.WorkingDirectory = $repo
 $shortcut.WindowStyle = 1
-$shortcut.Description = 'Source: git clone script-control-center; launch is manual'
+$shortcut.Description = 'Standalone Script Catalog from Git clone; launch is manual'
 $shortcut.Save()
 Write-Host 'SHORTCUT SWITCHED TO GIT CLONE. Workers and Fortis not started.' -ForegroundColor Green
-Write-Host 'Open Control Center, Scripts > Built-in bundle. Manually remove obsolete installed-copy catalog registrations.'
+Write-Host 'Standalone Script Catalog is the target. Existing catalog registrations are preserved: do not reimport on routine pulls.'
