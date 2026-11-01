@@ -170,6 +170,49 @@ class MirrorInspectorSourceChecks(unittest.TestCase):
         self.assertIn('parser.add_argument("--stdout"', exporter)
         self.assertIn('parser.add_argument("--repo"', exporter)
 
+    def test_compact_columns_and_full_ordered_selection_details(self):
+        ui = (ROOT / 'Mirror-Status.UI.cs').read_text(encoding='utf-8-sig')
+        # The requested columns are numbered from one in the Windows GUI:
+        # 2 = GitHub main, 6 = Windows changes, 7 = behind, 9 = Docker.
+        columns = [
+            ('Репозиторий', 190),
+            ('GitHub main', 135),
+            ('Локальный main', 105),
+            ('GitHub SHA', 105),
+            ('Ветка', 100),
+            ('Windows: изменения', 112),
+            ('Отстаёт на', 82),
+            ('Последний локальный коммит', 310),
+            ('Docker: изменения', 135),
+        ]
+        for title, width in columns:
+            self.assertIn('list.Columns.Add("%s", %d);' % (title, width), ui)
+        self.assertIn('detail.WordWrap = true;', ui)
+        self.assertIn('detail.ScrollBars = ScrollBars.Vertical;', ui)
+        self.assertIn('detail.SelectionStart = 0;', ui)
+        self.assertIn('detail.ScrollToCaret();', ui)
+        self.assertIn('new RowStyle(SizeType.Absolute, 238)', ui)
+
+        single = ui.split('    private void ShowSelection() {', 1)[1].split(
+            '      } else if (list.SelectedItems.Count > 1)', 1)[0]
+        # Full strings, never the short SHA or ellipsized ListView subitems.
+        self.assertIn('v.LocalFull', single)
+        self.assertIn('v.RemoteFull', single)
+        self.assertIn('v.Commit.Replace(', single)
+        self.assertNotIn('SubItems[', single)
+        ordered_labels = [
+            'Репозиторий: ', 'GitHub main: ', 'Локальный main: ',
+            'GitHub SHA: ', 'Ветка: ', 'Windows: изменения: ',
+            'Отстаёт на: ', 'Последний локальный коммит: ',
+            'Docker: изменения: '
+        ]
+        positions = [single.index('lines.AppendLine("%s"' % title)
+                     for title in ordered_labels]
+        self.assertEqual(positions, sorted(positions))
+        self.assertLess(positions[-1], single.index('Путь Windows: '))
+        self.assertIn('DockerDetails(selected)', single)
+        self.assertIn('StringBuilder', single)
+
     def test_copy_paths_and_single_repo_full_commit_guards(self):
         ui = (ROOT / 'Mirror-Status.UI.cs').read_text(encoding='utf-8-sig')
         for text in ('Копировать пути', 'CopyPaths()', 'Clipboard.SetText',

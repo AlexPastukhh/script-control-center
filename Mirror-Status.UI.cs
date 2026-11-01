@@ -97,7 +97,7 @@ namespace FortisMirror {
       var layout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3, Padding = new Padding(12) };
       layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 148));
       layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-      layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 175));
+      layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 238));
       Controls.Add(layout);
 
       var header = new Panel { Dock = DockStyle.Fill };
@@ -132,14 +132,14 @@ namespace FortisMirror {
       list.ForeColor = Color.FromArgb(230, 239, 248);
       list.BorderStyle = BorderStyle.FixedSingle;
       list.Columns.Add("Репозиторий", 190);
-      list.Columns.Add("GitHub main", 185);
+      list.Columns.Add("GitHub main", 135);
       list.Columns.Add("Локальный main", 105);
       list.Columns.Add("GitHub SHA", 105);
       list.Columns.Add("Ветка", 100);
-      list.Columns.Add("Windows: изменения", 140);
-      list.Columns.Add("Отстаёт на", 98);
+      list.Columns.Add("Windows: изменения", 112);
+      list.Columns.Add("Отстаёт на", 82);
       list.Columns.Add("Последний локальный коммит", 310);
-      list.Columns.Add("Docker: изменения", 175);
+      list.Columns.Add("Docker: изменения", 135);
       layout.Controls.Add(list, 0, 1);
 
       var footer = new Panel { Dock = DockStyle.Fill };
@@ -148,6 +148,7 @@ namespace FortisMirror {
       progress.ForeColor = Color.FromArgb(192, 215, 237);
       detail.Dock = DockStyle.Fill;
       detail.Multiline = true; detail.ReadOnly = true; detail.ScrollBars = ScrollBars.Vertical;
+      detail.WordWrap = true;
       detail.BorderStyle = BorderStyle.None;
       detail.BackColor = Color.FromArgb(12, 22, 38);
       detail.ForeColor = Color.FromArgb(156, 180, 207);
@@ -295,23 +296,24 @@ namespace FortisMirror {
       return label;
     }
 
-    private string DockerDescription(RepoRow row) {
+    private string DockerDetails(RepoRow row) {
       DockerState state;
       if (!dockerStates.TryGetValue(row.Item.Text, out state))
-        return "Docker: не проверен. Кнопка «Проверить выбранные» проверит Windows и Docker.";
+        return "Docker: не проверен; запросите проверку Windows и Docker.";
       if (state.Problem.Length > 0)
-        return "Docker: " + state.Problem + ". Проверка Windows работает независимо.";
-      string stamp = state.CapturedUtc.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture) + " UTC";
-      string comparison = "";
+        return "Docker: " + state.Problem + ". Проверка Windows независима.";
+      var lines = new StringBuilder();
+      lines.AppendLine("Docker HEAD: " + state.Head);
+      lines.AppendLine("Docker проверено (UTC): " +
+        state.CapturedUtc.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture));
+      lines.AppendLine("Docker источник: " +
+        (state.Live ? "Docker exec (проверка по запросу)" : "импортированный TSV"));
       if (row.Last != null && Regex.IsMatch(row.Last.RemoteFull, @"^[0-9a-f]{40}$")) {
-        comparison = String.Equals(state.Head, row.Last.RemoteFull, StringComparison.OrdinalIgnoreCase) ?
-          " | Docker HEAD = GitHub main" :
-          " | Docker HEAD отличается от GitHub main (направление неизвестно)";
+        lines.AppendLine("Docker HEAD и GitHub main: " +
+          (String.Equals(state.Head, row.Last.RemoteFull, StringComparison.OrdinalIgnoreCase) ?
+            "совпадают" : "различаются (направление расхождения неизвестно)"));
       }
-      return "Docker: " + DockerLabel(row.Item.Text) + " | проверено " + stamp +
-        (state.Live ? " | Docker exec (проверка по запросу)" : " | импортированный TSV") +
-        " | HEAD: " + state.Head + comparison + Environment.NewLine +
-        "Состояние Docker зафиксировано на время проверки, не отслеживается непрерывно.";
+      return lines.ToString().TrimEnd();
     }
 
     private bool ParseDockerSnapshot(string path, out DateTime stamp,
@@ -589,21 +591,38 @@ namespace FortisMirror {
     private void ShowSelection() {
       if (list.SelectedItems.Count == 1) {
         RepoRow selected = (RepoRow)list.SelectedItems[0].Tag;
-        if (selected.Last == null) {
-          detail.Text = selected.Path + Environment.NewLine +
-            "Windows: не проверено." + Environment.NewLine + DockerDescription(selected);
-        } else {
-          CheckResult v = selected.Last;
-          detail.Text = selected.Path + Environment.NewLine + DockerDescription(selected) + Environment.NewLine +
-            "Windows: " + v.Changes + Environment.NewLine +
-            "Локальный main: " + (v.LocalFull.Length > 0 ? v.LocalFull : "неизвестен") + Environment.NewLine +
-            "Последний локальный коммит: " + v.Commit + Environment.NewLine +
-            "GitHub main: " + (v.RemoteFull.Length > 0 ? v.RemoteFull : "неизвестен") + Environment.NewLine +
-            "Коммитов позади: " + v.Behind +
-            (v.AheadCount > 0 ? "  |  Локальных коммитов сверх общего предка: " + v.AheadCount : "") +
-            (v.CanPull ? "   |   Pull доступен с подтверждением" : "   |   Pull заблокирован") +
-            (v.CanCommitAll ? "   |   Коммит всех Windows-изменений доступен" : "");
+        CheckResult v = selected.Last;
+        // Match the nine ListView columns exactly. All values below are full,
+        // independent of column widths or any visible ListView ellipsizing.
+        var lines = new StringBuilder();
+        lines.AppendLine("Репозиторий: " + selected.Item.Text);
+        lines.AppendLine("GitHub main: " +
+          (v != null ? v.State : selected.IsGit ? "НЕ ПРОВЕРЕН" : "НЕ GIT-КЛОН"));
+        lines.AppendLine("Локальный main: " +
+          (v != null && v.LocalFull.Length > 0 ? v.LocalFull : "—"));
+        lines.AppendLine("GitHub SHA: " +
+          (v != null && v.RemoteFull.Length > 0 ? v.RemoteFull : "—"));
+        lines.AppendLine("Ветка: " + (v != null ? v.Branch : "—"));
+        lines.AppendLine("Windows: изменения: " + (v != null ? v.Changes : "—"));
+        lines.AppendLine("Отстаёт на: " + (v != null ? v.Behind : "—"));
+        lines.AppendLine("Последний локальный коммит: " +
+          (v != null ? v.Commit.Replace("\t", " | ") : "—"));
+        lines.AppendLine("Docker: изменения: " + DockerLabel(selected.Item.Text));
+        // Extra details follow all nine fields, never inserted between columns.
+        lines.AppendLine();
+        lines.AppendLine("Путь Windows: " + selected.Path);
+        lines.AppendLine(DockerDetails(selected));
+        if (v != null) {
+          if (v.AheadCount > 0)
+            lines.AppendLine("Локальных коммитов сверх общего предка: " + v.AheadCount);
+          lines.AppendLine("Pull: " +
+            (v.CanPull ? "доступен с подтверждением" : "заблокирован"));
+          lines.AppendLine("Коммит всего в Windows: " +
+            (v.CanCommitAll ? "доступен с подтверждением" : "недоступен"));
         }
+        detail.Text = lines.ToString().TrimEnd();
+        detail.SelectionStart = 0;
+        detail.ScrollToCaret();
       } else if (list.SelectedItems.Count > 1) {
         int gitCount = 0;
         foreach (ListViewItem item in list.SelectedItems)
