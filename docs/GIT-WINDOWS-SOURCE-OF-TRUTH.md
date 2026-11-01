@@ -8,7 +8,7 @@
 4. The single Desktop `Fortis RDG Control Center.lnk` should launch `Start-ControlCenter.ps1` **in that Windows clone**. The launcher, catalog, worker adapters and repo1/repo2 resource guards live in Git there. Source code and worker scripts are not copied to `%LOCALAPPDATA%` during an update.
 5. Installing/pulling source does not run arbitrary scripts or authorize an existing service restart. The owner explicitly chooses any worker Run; do not automatically stop or replace an active tunnel.
 
-Use `tools/Update-Windows-ControlCenter.ps1` **from the Windows clone** for source verification and shortcut switching. Default is read-only. The optional `-Apply` pulls `main` fast-forward-only and then switches the Desktop shortcut after checks. It does not start a tunnel, change Docker, update pins, or run a worker. WinForms compilation and live connection still require separate owner testing. For initial clone, use `git clone https://github.com/AlexPastukhh/script-control-center.git "$env:USERPROFILE\repos\script-control-center"` in Windows PowerShell.
+Use `tools/Update-Windows-ControlCenter.ps1` **from the Windows clone** for source verification and shortcut switching. Default is read-only. The optional `-Apply` pulls `main` fast-forward-only, runs two compile-only Windows WinForms tests and both Repo 1/2 read-only Previews, then switches the Desktop shortcut after all checks pass. It does not start a tunnel, change Docker, update pins, or run a worker. WinForms compilation and live connection still require separate owner testing. For initial clone, use `git clone https://github.com/AlexPastukhh/script-control-center.git "$env:USERPROFILE\repos\script-control-center"` in Windows PowerShell.
 
 ## Location and scope
 

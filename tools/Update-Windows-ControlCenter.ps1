@@ -69,6 +69,22 @@ foreach ($file in $toParse) {
     }
 }
 Write-Host 'STATIC PREFLIGHT PASS: files, SHA pin, PowerShell syntax.' -ForegroundColor Green
+# Compile the real WinForms sources in fresh STA PowerShell processes.
+# Add-Type compiles source but does NOT open Control Center or start workers.
+if ($Apply) {
+    $windowsPowerShell = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    foreach ($compileScript in @('Test-Compile.ps1','Test-ScriptCatalogCompile.ps1')) {
+        $compilePath = Join-Path $repo $compileScript
+        if (-not (Test-Path -LiteralPath $compilePath -PathType Leaf)) {
+            throw "Windows compile test missing: $compileScript"
+        }
+        & $windowsPowerShell -NoProfile -STA -ExecutionPolicy Bypass -File $compilePath
+        if ($LASTEXITCODE -ne 0) {
+            throw "WinForms compile test FAILED: $compileScript. Shortcut unchanged."
+        }
+    }
+    Write-Host 'WINDOWS WINFORMS COMPILATION PASS.' -ForegroundColor Green
+}
 # -Apply requires read-only acceptance of BOTH cloned launcher source files.
 # Preview must never invoke Run or create a second MCP tunnel.
 if ($Apply) {
