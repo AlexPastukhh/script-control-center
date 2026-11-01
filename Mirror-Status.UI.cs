@@ -19,6 +19,8 @@ namespace FortisMirror {
   internal sealed class GitResult {
     internal bool Ok;
     internal bool Timeout;
+    internal int ExitCode = -1;
+    internal string Failure = "";
     internal string Output;
   }
   internal sealed class CheckResult {
@@ -261,18 +263,24 @@ namespace FortisMirror {
       if (branch.Ok && branch.Output.Length > 0) data.Branch = branch.Output;
       else data.Branch = "(detached)";
       if (dirty.Ok) data.Changes = dirty.Output.Length == 0 ? "Нет" : "Да";
-      else data.Changes = "?";
+      else data.Changes = dirty.Timeout ? "Таймаут" : "?";
       if (token.IsCancellationRequested) return data;
-      if (local.Timeout || branch.Timeout || dirty.Timeout) {
+      // A slow worktree status must not hide the main-SHA comparison.
+      if (local.Timeout || branch.Timeout) {
         data.State = "ЛОКАЛЬНЫЙ ТАЙМАУТ";
         return data;
       }
       GitResult origin = GitRead(path, "remote get-url origin", 5000, token);
       if (!origin.Ok) { data.State = "НЕТ ORIGIN"; return data; }
       if (!AllowedOrigin(origin.Output)) { data.State = "ДРУГОЙ ORIGIN"; return data; }
-      GitResult remote = GitRead(path, "ls-remote --exit-code origin refs/heads/main", 12000, token);
+      // Override the broken Windows Schannel backend for HTTPS GitHub queries only.
+      // This does not change local/global Git configuration or bypass certificate checks.
+      bool https = origin.Output.StartsWith("https://github.com/", StringComparison.OrdinalIgnoreCase);
+      GitResult remote = GitRead(path, "ls-remote --exit-code origin refs/heads/main", 12000, token, https);
       if (!remote.Ok) {
-        data.State = remote.Timeout ? "ТАЙМАУТ GITHUB" : "GITHUB НЕДОСТУПЕН";
+        data.State = remote.Timeout ? "ТАЙМАУТ GITHUB" :
+          remote.ExitCode == 2 ? "НЕТ GITHUB MAIN" :
+          remote.Failure.Length > 0 ? remote.Failure : "GITHUB НЕДОСТУПЕН";
         return data;
       }
       Match m = Regex.Match(remote.Output, @"(?m)^([0-9a-fA-F]{40})\s+refs/heads/main\s*$");
@@ -292,7 +300,8 @@ namespace FortisMirror {
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     }
 
-    private GitResult GitRead(string repo, string command, int timeoutMs, CancellationToken token) {
+    private GitResult GitRead(string repo, string command, int timeoutMs, CancellationToken token,
+      bool forceOpenSsl = false) {
       var result = new GitResult { Output = "" };
       if (token.IsCancellationRequested) return result;
       try {
@@ -300,7 +309,9 @@ namespace FortisMirror {
           var psi = proc.StartInfo;
           psi.FileName = gitExe;
           // No shell involved; command is selected from fixed read-only Git verbs.
-          psi.Arguments = "-c core.fsmonitor=false -C " + Quote(repo) + " " + command;
+          psi.Arguments = (forceOpenSsl ?
+            "-c http.sslBackend=openssl -c http.sslVerify=true " : "") +
+            "-c core.fsmonitor=false -C " + Quote(repo) + " " + command;
           psi.UseShellExecute = false;
           psi.CreateNoWindow = true;
           psi.RedirectStandardOutput = true;
@@ -310,14 +321,19 @@ namespace FortisMirror {
           psi.EnvironmentVariables["GIT_OPTIONAL_LOCKS"] = "0";
           psi.EnvironmentVariables["GIT_SSH_COMMAND"] = "ssh -o BatchMode=yes -o ConnectTimeout=8";
           var output = new StringBuilder();
+          var errors = new StringBuilder();
           object gate = new object();
           proc.OutputDataReceived += delegate(object sender, DataReceivedEventArgs e) {
             if (e.Data != null) lock (gate) {
               if (output.Length < 8192) output.AppendLine(e.Data);
             }
           };
-          // Drain stderr to avoid blocking, but never show raw credential-manager errors.
-          proc.ErrorDataReceived += delegate(object sender, DataReceivedEventArgs e) { };
+          // Drain stderr; classify locally but never display raw credential/URL errors.
+          proc.ErrorDataReceived += delegate(object sender, DataReceivedEventArgs e) {
+            if (e.Data != null) lock (gate) {
+              if (errors.Length < 4096) errors.AppendLine(e.Data);
+            }
+          };
           proc.Start();
           proc.BeginOutputReadLine();
           proc.BeginErrorReadLine();
@@ -335,14 +351,30 @@ namespace FortisMirror {
           }
           if (!stopped) {
             proc.WaitForExit();
+            result.ExitCode = proc.ExitCode;
             result.Ok = proc.ExitCode == 0;
           }
-          lock (gate) { result.Output = output.ToString().Trim(); }
+          lock (gate) {
+            result.Output = output.ToString().Trim();
+            result.Failure = ClassifyGitError(errors.ToString());
+          }
         }
       } catch (Exception) {
         result.Ok = false;
       }
       return result;
+    }
+
+    private static string ClassifyGitError(string message) {
+      if (Regex.IsMatch(message, @"(?i)(schannel|AcquireCredentialsHandle|SEC_E_INTERNAL_ERROR|ssl certificate|SSL_connect|TLS handshake|unsupported SSL backend|SSL backend)"))
+        return "ОШИБКА TLS";
+      if (Regex.IsMatch(message, @"(?i)(authentication failed|permission denied|repository not found|could not read Username|HTTP 401|HTTP 403|not authorized)"))
+        return "ОШИБКА ДОСТУПА";
+      if (Regex.IsMatch(message, @"(?i)(could not resolve host|name or service not known|name resolution|no such host)"))
+        return "ОШИБКА DNS";
+      if (Regex.IsMatch(message, @"(?i)(failed to connect|network is unreachable|connection refused|connection timed out)"))
+        return "ОШИБКА СЕТИ";
+      return "";
     }
 
     private static string Quote(string path) {

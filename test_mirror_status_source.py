@@ -33,6 +33,25 @@ class MirrorInspectorSourceChecks(unittest.TestCase):
         self.assertIn('AlexPastukhh', ui)
         self.assertIn('timeoutMs', ui)
 
+    def test_github_https_uses_verified_openssl_without_config_mutations(self):
+        ui = (ROOT / 'Mirror-Status.UI.cs').read_text(encoding='utf-8-sig')
+        report = (ROOT / 'Mirror-Status.Report.ps1').read_text(encoding='utf-8-sig')
+        for text in (ui, report):
+            self.assertIn('http.sslBackend=openssl', text)
+            self.assertIn('http.sslVerify=true', text)
+            self.assertNotIn('http.sslVerify=false', text)
+            self.assertNotIn('sslVerify false', text)
+            self.assertNotIn('config --global', text)
+            self.assertNotIn('config --local', text)
+        self.assertIn('bool https = origin.Output.StartsWith("https://github.com/"', ui)
+        self.assertIn('bool forceOpenSsl = false', ui)
+        self.assertIn('ClassifyGitError', ui)
+        for reason in ('ОШИБКА TLS', 'ОШИБКА ДОСТУПА', 'ОШИБКА DNS', 'ОШИБКА СЕТИ'):
+            self.assertIn(reason, ui)
+        self.assertIn('dirty.Timeout ? "Таймаут"', ui)
+        self.assertIn('if (local.Timeout || branch.Timeout)', ui)
+        self.assertIn('raw credential/URL errors', ui)
+
     def test_original_cli_report_kept(self):
         report = (ROOT / 'Mirror-Status.Report.ps1').read_text(encoding='utf-8')
         self.assertIn('Need review:', report)

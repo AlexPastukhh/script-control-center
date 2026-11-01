@@ -48,7 +48,13 @@ try {
         } elseif ($origin.Text -notmatch '^(?i:(https://github\.com/|git@github\.com:)AlexPastukhh/[A-Za-z0-9_.-]+(?:\.git)?)$') {
             $state = 'UNEXPECTED ORIGIN'
         } else {
-            $remote = GitRead $path @('ls-remote','--exit-code','origin','refs/heads/main')
+            # Per-process OpenSSL avoids Schannel failures in other Windows clones.
+            # TLS certificate validation stays ON; no repository config is changed.
+            if ($origin.Text -match '^https://github\.com/') {
+                $remote = GitRead $path @('-c','http.sslBackend=openssl','-c','http.sslVerify=true','ls-remote','--exit-code','origin','refs/heads/main')
+            } else {
+                $remote = GitRead $path @('ls-remote','--exit-code','origin','refs/heads/main')
+            }
             if (-not $remote.Ok) {
                 $state = 'REMOTE UNAVAILABLE'
             } elseif ($remote.Text -match '(?m)^([0-9a-fA-F]{40})\s+refs/heads/main$') {
