@@ -128,6 +128,16 @@ class MirrorInspectorSourceChecks(unittest.TestCase):
         self.assertIn('psi.EnvironmentVariables["GIT_OPTIONAL_LOCKS"] = "1"', ui)
 
 
+    def test_no_unused_pull_flag_causes_windows_add_type_failure(self):
+        # Windows PowerShell 5.1 Add-Type reports CS0414 as SOURCE_CODE_ERROR
+        # when a private field is only written and never used.
+        ui = (ROOT / 'Mirror-Status.UI.cs').read_text(encoding='utf-8-sig')
+        self.assertNotIn('private bool pulling;', ui)
+        self.assertNotIn('pulling = true;', ui)
+        self.assertNotIn('pulling = false;', ui)
+        self.assertIn('private bool writing;', ui)
+        self.assertIn('if (writing)', ui)
+
     def test_docker_snapshot_is_explicit_dated_and_not_live(self):
         ui = (ROOT / 'Mirror-Status.UI.cs').read_text(encoding='utf-8-sig')
         for text in ('Снимок Docker', 'Windows: изменения', 'Docker: изменения',

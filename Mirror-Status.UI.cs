@@ -77,7 +77,6 @@ namespace FortisMirror {
     private readonly TextBox detail = new TextBox();
     private CancellationTokenSource current;
     private bool running;
-    private bool pulling;
     private bool writing;
 
     public MirrorWindow(string mirrorRoot, string gitPath) {
@@ -635,7 +634,6 @@ namespace FortisMirror {
         MessageBoxButtons.YesNo, MessageBoxIcon.Warning,
         MessageBoxDefaultButton.Button2) != DialogResult.Yes) return;
       running = true;
-      pulling = true;
       writing = true;
       current = new CancellationTokenSource();
       progress.Text = "Повторная проверка " + row.Item.Text + " перед обновлением...";
@@ -680,7 +678,6 @@ namespace FortisMirror {
               Color.FromArgb(116, 215, 169) : Color.FromArgb(255, 195, 117);
           }
           running = false;
-          pulling = false;
           writing = false;
           ShowSelection();
           bool ok = reason == null && result != null && result.Ok;
