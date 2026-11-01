@@ -25,7 +25,7 @@ class MirrorInspectorSourceChecks(unittest.TestCase):
         for cmd in ('rev-parse --verify', 'symbolic-ref --quiet', 'status --porcelain',
                     'remote get-url origin', 'ls-remote --exit-code'):
             self.assertIn(cmd, ui)
-        for forbidden in ('"pull ', '"push ', '"fetch ', '"checkout ', '"reset ', '"clean ', '"commit '):
+        for forbidden in ('"push ', '"fetch ', '"checkout ', '"reset ', '"clean ', '"commit '):
             self.assertNotIn(forbidden, ui)
         self.assertIn('GIT_TERMINAL_PROMPT', ui)
         self.assertIn('GCM_INTERACTIVE', ui)
@@ -51,6 +51,45 @@ class MirrorInspectorSourceChecks(unittest.TestCase):
         self.assertIn('dirty.Timeout ? "Таймаут"', ui)
         self.assertIn('if (local.Timeout || branch.Timeout)', ui)
         self.assertIn('raw credential/URL errors', ui)
+
+    def test_pull_is_single_repo_explicit_confirmed_and_fast_forward_only(self):
+        ui = (ROOT / 'Mirror-Status.UI.cs').read_text(encoding='utf-8-sig')
+        self.assertIn('pullOne.Click += delegate { BeginPull(); }', ui)
+        self.assertIn('CheckResult expected = row.Last;', ui)
+        self.assertIn('!expected.CanPull', ui)
+        self.assertIn('MessageBoxButtons.YesNo', ui)
+        self.assertIn('MessageBoxDefaultButton.Button2', ui)
+        self.assertIn('CheckResult fresh = CheckRepository(row.Path, CancellationToken.None)', ui)
+        for condition in ('!fresh.CanPull', 'fresh.LocalFull != expected.LocalFull',
+                          'fresh.RemoteFull != expected.RemoteFull', 'fresh.Changes != "Нет"'):
+            self.assertIn(condition, ui)
+        self.assertIn('GitPullFastForward(row.Path, fresh.UseOpenSsl)', ui)
+        self.assertIn('pull --ff-only --no-rebase --no-recurse-submodules origin main', ui)
+        self.assertIn('-c core.hooksPath=/dev/null', ui)
+        self.assertIn('-c submodule.recurse=false', ui)
+        self.assertIn('psi.EnvironmentVariables["GIT_OPTIONAL_LOCKS"] = "1";', ui)
+        self.assertIn('e.Cancel = true;', ui)
+        self.assertIn('cancel.Enabled = running && !pulling;', ui)
+        self.assertIn('result.Ok', ui)
+        self.assertIn('НЕЗАКОНЧЕННАЯ ОПЕРАЦИЯ', ui)
+
+    def test_pull_requires_clean_main_known_shas_not_failed_network(self):
+        ui = (ROOT / 'Mirror-Status.UI.cs').read_text(encoding='utf-8-sig')
+        for condition in ('State == "РАЗЛИЧАЮТСЯ"', 'Branch == "main"',
+                          'Changes == "Нет"', 'Regex.IsMatch(LocalFull,',
+                          'Regex.IsMatch(RemoteFull,'):
+            self.assertIn(condition, ui)
+        self.assertIn('local.Output.ToLowerInvariant()', ui)
+        self.assertIn('data.RemoteFull = remoteHash', ui)
+        self.assertIn('log -1 --format=%h%x09%as%x09%s', ui)
+        self.assertIn('Последний локальный коммит:', ui)
+        self.assertIn('list.Columns.Add("Последний локальный коммит", 310)', ui)
+        self.assertIn('row.Item.SubItems[6].Text = result.Commit', ui)
+        self.assertIn('row.Item.SubItems[6].Text = checkedState.Commit', ui)
+        self.assertIn('GitHub main:', ui)
+        self.assertIn('status --porcelain=v1 --untracked-files=all', ui)
+        self.assertNotIn('status --porcelain=v1 --untracked-files=normal --ignore-submodules=all', ui)
+        self.assertEqual(ui.count('pull --ff-only --no-rebase --no-recurse-submodules origin main'), 1)
 
     def test_original_cli_report_kept(self):
         report = (ROOT / 'Mirror-Status.Report.ps1').read_text(encoding='utf-8')

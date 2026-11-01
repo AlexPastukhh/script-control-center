@@ -1,5 +1,5 @@
-﻿// Windows Forms read-only Git mirror inspector for Windows PowerShell 5.1.
-// Git queries run on a background thread with time limits; never fetch/pull/write.
+﻿// Windows Forms Git mirror inspector for Windows PowerShell 5.1.
+// Inspection never updates clones; selected manual pull is guarded and fast-forward-only.
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -15,6 +15,7 @@ namespace FortisMirror {
     internal string Path;
     internal bool IsGit;
     internal ListViewItem Item;
+    internal CheckResult Last;
   }
   internal sealed class GitResult {
     internal bool Ok;
@@ -27,8 +28,19 @@ namespace FortisMirror {
     internal string State = "НЕ ПРОВЕРЕН";
     internal string Local = "—";
     internal string Remote = "—";
+    internal string LocalFull = "";
+    internal string RemoteFull = "";
+    internal bool UseOpenSsl;
+    internal string Commit = "Сведения о коммите не получены.";
     internal string Branch = "—";
     internal string Changes = "—";
+    internal bool CanPull {
+      get {
+        return State == "РАЗЛИЧАЮТСЯ" && Branch == "main" && Changes == "Нет" &&
+          Regex.IsMatch(LocalFull, @"^[0-9a-fA-F]{40}$") &&
+          Regex.IsMatch(RemoteFull, @"^[0-9a-fA-F]{40}$");
+      }
+    }
   }
   public sealed class MirrorWindow : Form {
     private readonly string root, gitExe;
@@ -36,12 +48,14 @@ namespace FortisMirror {
     private readonly ListView list = new ListView();
     private readonly Button checkOne = MakeButton("Проверить выбранный", 175);
     private readonly Button checkAll = MakeButton("Проверить все", 135);
+    private readonly Button pullOne = MakeButton("Pull выбранного", 160);
     private readonly Button refresh = MakeButton("Обновить список", 150);
     private readonly Button cancel = MakeButton("Отмена проверки", 155);
     private readonly Label progress = new Label();
-    private readonly Label detail = new Label();
+    private readonly TextBox detail = new TextBox();
     private CancellationTokenSource current;
     private bool running;
+    private bool pulling;
 
     public MirrorWindow(string mirrorRoot, string gitPath) {
       root = Path.GetFullPath(mirrorRoot);
@@ -57,7 +71,7 @@ namespace FortisMirror {
       var layout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3, Padding = new Padding(12) };
       layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 113));
       layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-      layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 96));
+      layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 155));
       Controls.Add(layout);
 
       var header = new Panel { Dock = DockStyle.Fill };
@@ -73,7 +87,7 @@ namespace FortisMirror {
         Dock = DockStyle.Bottom, Height = 46, WrapContents = false,
         FlowDirection = FlowDirection.LeftToRight, AutoScroll = true
       };
-      foreach (Button b in new Button[] { checkOne, checkAll, refresh, cancel }) actions.Controls.Add(b);
+      foreach (Button b in new Button[] { checkOne, checkAll, pullOne, refresh, cancel }) actions.Controls.Add(b);
       cancel.Enabled = false;
       // Dock order: controls added bottom-to-top.
       header.Controls.Add(actions);
@@ -90,19 +104,23 @@ namespace FortisMirror {
       list.BackColor = Color.FromArgb(21, 35, 54);
       list.ForeColor = Color.FromArgb(230, 239, 248);
       list.BorderStyle = BorderStyle.FixedSingle;
-      list.Columns.Add("Репозиторий", 225);
-      list.Columns.Add("GitHub main", 237);
-      list.Columns.Add("Локальный main", 125);
-      list.Columns.Add("GitHub SHA", 125);
-      list.Columns.Add("Ветка", 120);
-      list.Columns.Add("Изменения", 120);
+      list.Columns.Add("Репозиторий", 190);
+      list.Columns.Add("GitHub main", 185);
+      list.Columns.Add("Локальный main", 105);
+      list.Columns.Add("GitHub SHA", 105);
+      list.Columns.Add("Ветка", 100);
+      list.Columns.Add("Изменения", 95);
+      list.Columns.Add("Последний локальный коммит", 310);
       layout.Controls.Add(list, 0, 1);
 
       var footer = new Panel { Dock = DockStyle.Fill };
       progress.Dock = DockStyle.Top; progress.Height = 30;
       progress.Font = new Font("Segoe UI Semibold", 10f, FontStyle.Bold);
       progress.ForeColor = Color.FromArgb(192, 215, 237);
-      detail.Dock = DockStyle.Top; detail.Height = 53; detail.AutoEllipsis = true;
+      detail.Dock = DockStyle.Fill;
+      detail.Multiline = true; detail.ReadOnly = true; detail.ScrollBars = ScrollBars.Vertical;
+      detail.BorderStyle = BorderStyle.None;
+      detail.BackColor = Color.FromArgb(12, 22, 38);
       detail.ForeColor = Color.FromArgb(156, 180, 207);
       footer.Controls.Add(detail);
       footer.Controls.Add(progress);
@@ -110,11 +128,18 @@ namespace FortisMirror {
 
       checkOne.Click += delegate { BeginCheck(false); };
       checkAll.Click += delegate { BeginCheck(true); };
+      pullOne.Click += delegate { BeginPull(); };
       refresh.Click += delegate { RefreshList(); };
       cancel.Click += delegate { if (current != null) current.Cancel(); };
       list.SelectedIndexChanged += delegate { ShowSelection(); };
       list.DoubleClick += delegate { BeginCheck(false); };
-      FormClosing += delegate { if (current != null) current.Cancel(); };
+      FormClosing += delegate(object sender, FormClosingEventArgs e) {
+        if (pulling) {
+          e.Cancel = true;
+          MessageBox.Show(this, "Git pull ещё выполняется. Дождитесь результата; прерывать обновление файлов опасно.",
+            "Идёт обновление", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        } else if (current != null) current.Cancel();
+      };
       Shown += delegate { RefreshList(); };
       SetButtons();
     }
@@ -131,15 +156,27 @@ namespace FortisMirror {
       checkOne.Enabled = !running && list.SelectedItems.Count == 1 &&
         ((RepoRow)list.SelectedItems[0].Tag).IsGit;
       checkAll.Enabled = !running && repositories.Exists(delegate(RepoRow r) { return r.IsGit; });
+      pullOne.Enabled = !running && list.SelectedItems.Count == 1 &&
+        ((RepoRow)list.SelectedItems[0].Tag).Last != null &&
+        ((RepoRow)list.SelectedItems[0].Tag).Last.CanPull;
       refresh.Enabled = !running;
-      cancel.Enabled = running;
+      cancel.Enabled = running && !pulling;
     }
 
     private void ShowSelection() {
       if (list.SelectedItems.Count == 1) {
         RepoRow selected = (RepoRow)list.SelectedItems[0].Tag;
-        detail.Text = selected.Path + Environment.NewLine +
-          "Сверяются SHA ветки main; при расхождении НЕ предполагается автоматически, что допустим pull.";
+        if (selected.Last == null) {
+          detail.Text = selected.Path + Environment.NewLine +
+            "Коммиты не проверены. Проверка не изменяет файлы, pull требует отдельного подтверждения.";
+        } else {
+          CheckResult v = selected.Last;
+          detail.Text = selected.Path + Environment.NewLine +
+            "Локальный main: " + (v.LocalFull.Length > 0 ? v.LocalFull : "неизвестен") + Environment.NewLine +
+            "Последний локальный коммит: " + v.Commit + Environment.NewLine +
+            "GitHub main: " + (v.RemoteFull.Length > 0 ? v.RemoteFull : "неизвестен") +
+            (v.CanPull ? "   |   Pull доступен с подтверждением" : "   |   Pull заблокирован");
+        }
       } else {
         detail.Text = "Выберите репозиторий и нажмите «Проверить выбранный», либо нажмите «Проверить все».";
       }
@@ -167,6 +204,7 @@ namespace FortisMirror {
           item.SubItems.Add(git ? "НЕ ПРОВЕРЕН" : "НЕ GIT-КЛОН");
           item.SubItems.Add("—"); item.SubItems.Add("—");
           item.SubItems.Add("—"); item.SubItems.Add("—");
+          item.SubItems.Add("—");
           if (!git) item.ForeColor = Color.FromArgb(131, 153, 176);
           var row = new RepoRow { Path = folder, IsGit = git, Item = item };
           item.Tag = row;
@@ -202,6 +240,7 @@ namespace FortisMirror {
       SetButtons();
       progress.Text = "Проверка: 0 / " + targets.Count;
       foreach (RepoRow row in targets) {
+        row.Last = null;
         row.Item.SubItems[1].Text = "В ОЧЕРЕДИ";
         row.Item.ForeColor = Color.FromArgb(230, 239, 248);
       }
@@ -218,14 +257,17 @@ namespace FortisMirror {
           done++;
           int finished = done;
           Ui(delegate {
+            row.Last = result;
             row.Item.SubItems[1].Text = result.State;
             row.Item.SubItems[2].Text = result.Local;
             row.Item.SubItems[3].Text = result.Remote;
             row.Item.SubItems[4].Text = result.Branch;
             row.Item.SubItems[5].Text = result.Changes;
+            row.Item.SubItems[6].Text = result.Commit;
             row.Item.ForeColor = result.State == "АКТУАЛЕН" && result.Branch == "main" && result.Changes == "Нет" ?
               Color.FromArgb(116, 215, 169) : Color.FromArgb(255, 195, 117);
             progress.Text = "Проверено: " + finished + " / " + targets.Count;
+            ShowSelection();
           });
         }
         bool cancelled = token.IsCancellationRequested;
@@ -249,6 +291,128 @@ namespace FortisMirror {
       });
     }
 
+    private void BeginPull() {
+      if (running || list.SelectedItems.Count != 1) return;
+      RepoRow row = (RepoRow)list.SelectedItems[0].Tag;
+      CheckResult expected = row.Last;
+      if (!row.IsGit || expected == null || !expected.CanPull) return;
+      string ask = "Обновить только этот Windows-клон?\n\n" +
+        row.Path + "\n\n" +
+        "Локальный main: " + expected.LocalFull + "\n" +
+        "GitHub main: " + expected.RemoteFull + "\n\n" +
+        "Перед pull приложение повторно проверит ветку, origin, SHA и чистоту файлов.\n" +
+        "Команда: git pull --ff-only origin main.\n" +
+        "При расхождении истории Git откажет; локальные правки не удаляются.\n\n" +
+        "Git может выполнить настроенные фильтры файлов. Запущенные Fortis-процессы\n" +
+        "не остановятся, но исходники на диске изменятся. Для запуска/Guard нужна отдельная проверка. Продолжить?";
+      if (MessageBox.Show(this, ask, "Подтвердить обновление одного клона",
+        MessageBoxButtons.YesNo, MessageBoxIcon.Warning,
+        MessageBoxDefaultButton.Button2) != DialogResult.Yes) return;
+      running = true;
+      pulling = true;
+      current = new CancellationTokenSource();
+      progress.Text = "Повторная проверка " + row.Item.Text + " перед обновлением...";
+      SetButtons();
+      ThreadPool.QueueUserWorkItem(delegate {
+        GitResult pull = null;
+        CheckResult after = null;
+        string blocked = null;
+        try {
+          // Guard against a stale button or a modified repo since last inspection.
+          CheckResult fresh = CheckRepository(row.Path, CancellationToken.None);
+          if (!fresh.CanPull || fresh.LocalFull != expected.LocalFull ||
+              fresh.RemoteFull != expected.RemoteFull ||
+              fresh.Branch != expected.Branch || fresh.Changes != "Нет" ||
+              fresh.UseOpenSsl != expected.UseOpenSsl)
+            blocked = "Состояние репозитория изменилось либо проверка не прошла. Обновление отменено.";
+          else {
+            Ui(delegate { progress.Text = "Выполняется git pull --ff-only: " + row.Item.Text; });
+            // Intentionally no forced cancellation during a write to the working tree.
+            pull = GitPullFastForward(row.Path, fresh.UseOpenSsl);
+          }
+          after = CheckRepository(row.Path, CancellationToken.None);
+        } catch (Exception) {
+          blocked = "Неожиданная ошибка проверяльщика. Git-статус следует проверить вручную.";
+        }
+        GitResult result = pull;
+        CheckResult checkedState = after;
+        string reason = blocked;
+        Ui(delegate {
+          if (checkedState != null) {
+            row.Last = checkedState;
+            row.Item.SubItems[1].Text = checkedState.State;
+            row.Item.SubItems[2].Text = checkedState.Local;
+            row.Item.SubItems[3].Text = checkedState.Remote;
+            row.Item.SubItems[4].Text = checkedState.Branch;
+            row.Item.SubItems[5].Text = checkedState.Changes;
+            row.Item.SubItems[6].Text = checkedState.Commit;
+            row.Item.ForeColor = checkedState.State == "АКТУАЛЕН" &&
+              checkedState.Branch == "main" && checkedState.Changes == "Нет" ?
+              Color.FromArgb(116, 215, 169) : Color.FromArgb(255, 195, 117);
+          }
+          running = false;
+          pulling = false;
+          ShowSelection();
+          bool ok = reason == null && result != null && result.Ok;
+          string message = reason != null ? reason :
+            result == null ? "Обновление не выполнялось." :
+            result.Ok ? "Fast-forward pull завершился успешно." :
+            "Git pull не завершился: " +
+              (result.Failure.Length > 0 ? result.Failure : "проверьте историю, доступ и рабочее дерево.");
+          progress.Text = message;
+          if (ok && checkedState != null)
+            message += "\n\nНовый локальный main: " + checkedState.LocalFull +
+              "\nПоследний коммит: " + checkedState.Commit;
+          if (ok && checkedState != null && checkedState.State != "АКТУАЛЕН")
+            message += "\n\nВнимание: итоговая сетевая проверка не подтверждает совпадение SHA.";
+          MessageBox.Show(this, message, ok ? "Обновление завершено" : "Обновление не выполнено",
+            MessageBoxButtons.OK, ok ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
+        });
+      });
+    }
+
+    // The ONLY Git write operation in this application. Owner-triggered for one clean,
+    // verified main checkout. No forced timeout/kill during worktree updates.
+    private GitResult GitPullFastForward(string repo, bool openSsl) {
+      var result = new GitResult { Output = "" };
+      try {
+        using (var proc = new Process()) {
+          var psi = proc.StartInfo;
+          psi.FileName = gitExe;
+          psi.Arguments = (openSsl ? "-c http.sslBackend=openssl -c http.sslVerify=true " : "") +
+            "-c core.fsmonitor=false -c core.hooksPath=/dev/null -c submodule.recurse=false " +
+            "-C " + Quote(repo) + " pull --ff-only --no-rebase --no-recurse-submodules origin main";
+          psi.UseShellExecute = false;
+          psi.CreateNoWindow = true;
+          psi.RedirectStandardOutput = true;
+          psi.RedirectStandardError = true;
+          psi.EnvironmentVariables["GIT_TERMINAL_PROMPT"] = "0";
+          psi.EnvironmentVariables["GCM_INTERACTIVE"] = "never";
+          psi.EnvironmentVariables["GIT_SSH_COMMAND"] = "ssh -o BatchMode=yes -o ConnectTimeout=8";
+          // A write needs Git locks even if the parent process configured read-only Git.
+          psi.EnvironmentVariables["GIT_OPTIONAL_LOCKS"] = "1";
+          var errors = new StringBuilder();
+          object gate = new object();
+          proc.OutputDataReceived += delegate(object sender, DataReceivedEventArgs e) { };
+          proc.ErrorDataReceived += delegate(object sender, DataReceivedEventArgs e) {
+            if (e.Data != null) lock (gate) {
+              if (errors.Length < 4096) errors.AppendLine(e.Data);
+            }
+          };
+          proc.Start();
+          proc.BeginOutputReadLine();
+          proc.BeginErrorReadLine();
+          proc.WaitForExit();
+          result.ExitCode = proc.ExitCode;
+          result.Ok = proc.ExitCode == 0;
+          lock (gate) result.Failure = ClassifyGitError(errors.ToString());
+        }
+      } catch (Exception) {
+        result.Ok = false;
+      }
+      return result;
+    }
+
     private void Ui(Action action) {
       try {
         if (!IsDisposed && IsHandleCreated) BeginInvoke((MethodInvoker)delegate { if (!IsDisposed) action(); });
@@ -258,8 +422,13 @@ namespace FortisMirror {
       var data = new CheckResult();
       GitResult local = GitRead(path, "rev-parse --verify refs/heads/main^{commit}", 5000, token);
       GitResult branch = GitRead(path, "symbolic-ref --quiet --short HEAD", 5000, token);
-      GitResult dirty = GitRead(path, "status --porcelain=v1 --untracked-files=normal --ignore-submodules=all", 9000, token);
-      if (local.Ok && Regex.IsMatch(local.Output, @"^[0-9a-fA-F]{40}$")) data.Local = local.Output.Substring(0, 8);
+      GitResult dirty = GitRead(path, "status --porcelain=v1 --untracked-files=all", 9000, token);
+      GitResult log = GitRead(path, "log -1 --format=%h%x09%as%x09%s refs/heads/main", 5000, token);
+      if (local.Ok && Regex.IsMatch(local.Output, @"^[0-9a-fA-F]{40}$")) {
+        data.LocalFull = local.Output.ToLowerInvariant();
+        data.Local = data.LocalFull.Substring(0, 8);
+      }
+      if (log.Ok && log.Output.Length > 0) data.Commit = log.Output;
       if (branch.Ok && branch.Output.Length > 0) data.Branch = branch.Output;
       else data.Branch = "(detached)";
       if (dirty.Ok) data.Changes = dirty.Output.Length == 0 ? "Нет" : "Да";
@@ -276,6 +445,7 @@ namespace FortisMirror {
       // Override the broken Windows Schannel backend for HTTPS GitHub queries only.
       // This does not change local/global Git configuration or bypass certificate checks.
       bool https = origin.Output.StartsWith("https://github.com/", StringComparison.OrdinalIgnoreCase);
+      data.UseOpenSsl = https;
       GitResult remote = GitRead(path, "ls-remote --exit-code origin refs/heads/main", 12000, token, https);
       if (!remote.Ok) {
         data.State = remote.Timeout ? "ТАЙМАУТ GITHUB" :
@@ -286,6 +456,7 @@ namespace FortisMirror {
       Match m = Regex.Match(remote.Output, @"(?m)^([0-9a-fA-F]{40})\s+refs/heads/main\s*$");
       if (!m.Success) { data.State = "НЕТ GITHUB MAIN"; return data; }
       string remoteHash = m.Groups[1].Value.ToLowerInvariant();
+      data.RemoteFull = remoteHash;
       data.Remote = remoteHash.Substring(0, 8);
       if (!local.Ok) data.State = "НЕТ ЛОКАЛЬНОГО MAIN";
       else data.State = String.Equals(local.Output, remoteHash, StringComparison.OrdinalIgnoreCase) ?
@@ -366,6 +537,12 @@ namespace FortisMirror {
     }
 
     private static string ClassifyGitError(string message) {
+      if (Regex.IsMatch(message, @"(?i)(not possible to fast-forward|fatal: divergent branches|fatal: need to specify how to reconcile)"))
+        return "ИСТОРИИ РАЗОШЛИСЬ: нужен ручной разбор";
+      if (Regex.IsMatch(message, @"(?i)(your local changes|would be overwritten by merge|untracked working tree files would be overwritten)"))
+        return "ОБНАРУЖЕНЫ ЛОКАЛЬНЫЕ ИЗМЕНЕНИЯ";
+      if (Regex.IsMatch(message, @"(?i)(index\.lock|another git process|you have not concluded your merge)"))
+        return "GIT ЗАНЯТ ИЛИ ЕСТЬ НЕЗАКОНЧЕННАЯ ОПЕРАЦИЯ";
       if (Regex.IsMatch(message, @"(?i)(schannel|AcquireCredentialsHandle|SEC_E_INTERNAL_ERROR|ssl certificate|SSL_connect|TLS handshake|unsupported SSL backend|SSL backend)"))
         return "ОШИБКА TLS";
       if (Regex.IsMatch(message, @"(?i)(authentication failed|permission denied|repository not found|could not read Username|HTTP 401|HTTP 403|not authorized)"))
