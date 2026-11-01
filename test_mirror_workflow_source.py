@@ -4,6 +4,7 @@ No Windows Git trees, GitHub requests, deployment, or active services.
 Tests permitted switches only within disposable temp Git repositories.
 """
 from pathlib import Path
+import base64
 import importlib.util
 import os
 import re
@@ -65,6 +66,32 @@ class WorkflowSource(unittest.TestCase):
         self.assertIn("fresh.Item.Tag = fresh;", source)
         self.assertIn("Результаты обновлялись построчно", code)
         self.assertIn("if (token.IsCancellationRequested) break;", code)
+
+    def test_docker_stage_commit_push_only_current_active_branch(self):
+        source = CSharp.read_text(encoding="utf-8")
+        self.assertIn('Button("Stage Docker"', source)
+        self.assertIn('Button("Commit Docker"', source)
+        self.assertIn('Button("Push Docker"', source)
+        self.assertIn('BeginDockerGitPreview("stage")', source)
+        self.assertIn('BeginDockerGitPreview("commit")', source)
+        self.assertIn('BeginDockerGitPreview("push")', source)
+        self.assertIn('tools/Docker-Mirror-Git-Actions.py', source)
+        self.assertIn('python3 -B " + DockerGitActions', source)
+        self.assertIn('current.DockerActive != ready.Branch', source)
+        self.assertIn('current.DockerHead != ready.Head', source)
+        self.assertIn('ValidOrigin(r.DockerOrigin)', source)
+        self.assertIn('!Protected.Contains(activeDocker.Name)', source)
+        self.assertIn('ChooseDockerStageFiles(current, ready)', source)
+        self.assertIn('AskDockerCommitMessage(current, ready)', source)
+        self.assertIn('MessageBoxDefaultButton.Button2', source)
+        self.assertIn('ParseGitPreview(cmd.Text, operation', source)
+        self.assertIn('Digest.IsMatch(parts[3])', source)
+        self.assertIn('Encoding.UTF8.GetBytes(message)', source)
+        self.assertIn('BeginDockerGitWrite(current, operation', source)
+        self.assertIn('CancellationToken.None, true', source)
+        self.assertIn('BeginCheck(false);', source)
+        self.assertNotIn('git add -A', source)
+        self.assertNotIn('git push origin', source)
 
     def test_windows_powershell_51_thread_ctor_is_unambiguous(self):
         source = CSharp.read_text(encoding="utf-8")
@@ -143,6 +170,29 @@ class WorkflowSource(unittest.TestCase):
         self.assertIn("РАЗНЫ", source) if False else None
         self.assertIn("АКТИВНЫЕ ВЕТКИ РАЗНЫЕ", source)
 
+    def test_changed_file_details_are_separate_for_active_docker_windows(self):
+        source = CSharp.read_text(encoding="utf-8")
+        exporter = Exporter.read_text(encoding="utf-8")
+        self.assertIn("internal readonly List<string> DockerFiles", source)
+        self.assertIn("internal readonly List<string> WindowsFiles", source)
+        self.assertIn('} else if (part[0] == "F") {', source)
+        self.assertIn("Convert.FromBase64String(part[2])", source)
+        self.assertIn("new UTF8Encoding(false, true).GetString(", source)
+        self.assertIn("ValidChangeEntry(entry)", source)
+        self.assertIn("r.WindowsFiles.Add(cleanEntry)", source)
+        self.assertIn("internal bool OutputTruncated;", source)
+        self.assertIn("result.Ok = !stopped && p.ExitCode == 0 && !result.OutputTruncated;", source)
+        self.assertIn("ОТВЕТ СЛИШКОМ ДЛИННЫЙ", source)
+        self.assertIn("AppendChangedFiles(b, \"DOCKER\", r.DockerActive, r.DockerChanges, r.DockerFiles)", source)
+        self.assertIn("AppendChangedFiles(b, \"WINDOWS\", r.WindowsActive, r.WindowsChanges, r.WindowsFiles)", source)
+        self.assertIn("AddFields(b, r, r.DockerView, r.WindowsView)", source)
+        self.assertIn('if (codes == "??")', source)
+        self.assertIn("индекс: ", source)
+        self.assertIn("рабочая папка: ", source)
+        self.assertIn('rows.append("F\\t{}\\t{}".format(repo.name, encoded))', exporter)
+        self.assertIn("for entry in changes.splitlines()[:500]", exporter)
+        self.assertIn('.rstrip("\\r\\n")', exporter)
+
     def test_exporter_clean_and_comparison(self):
         module = load_exporter()
         with tempfile.TemporaryDirectory() as td:
@@ -185,6 +235,28 @@ class WorkflowSource(unittest.TestCase):
             ])[0], "C\ttestrepo\twork/test\t1\t0")
             self.assertEqual(work, git("rev-parse", "HEAD"),
                              "snapshot/compare must not switch or write")
+            self.assertEqual("", git("status", "--porcelain=v1"))
+
+            # Docker inventory must give exact paths/status codes, not only a count.
+            # The Git porcelain leading space must survive the exporter parser.
+            (repo / "README.md").write_text("modified baseline")
+            (repo / "new file.txt").write_text("untracked")
+            dirty_snapshot = module.snapshot(repos, ["testrepo"])
+            dirty_lines = dirty_snapshot.splitlines()
+            self.assertIn("R\ttestrepo\twork/test\t" + work + "\t2",
+                          dirty_snapshot)
+            encoded = [line.split("\t")[2] for line in dirty_lines
+                       if line.startswith("F\ttestrepo\t")]
+            decoded = [base64.b64decode(record, validate=True).decode("utf-8")
+                       for record in encoded]
+            self.assertEqual(len(decoded), 2)
+            self.assertIn(" M README.md", decoded)
+            self.assertIn('?? "new file.txt"', decoded)
+            self.assertEqual(work, git("rev-parse", "HEAD"))
+            # Snapshot is read-only, so the actual edits must still be present.
+            self.assertEqual("modified baseline", (repo / "README.md").read_text())
+            (repo / "README.md").write_text("baseline")
+            (repo / "new file.txt").unlink()
             self.assertEqual("", git("status", "--porcelain=v1"))
 
             with self.assertRaisesRegex(ValueError, "preflight"):

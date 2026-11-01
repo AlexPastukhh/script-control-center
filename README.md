@@ -1,6 +1,6 @@
 ﻿# Script Control Center
 
-Source for the standalone **Windows script catalog** and an optional combined Fortis/RDG Control Center. On 2026-11-01 the owner confirmed that the standalone catalog opens from the Windows Git clone and that five built-in worker entries were re-pointed to that clone. This confirms the catalog UI, **not** a successful Repo 1/2 reconnection from the cloned launchers.
+Source for the standalone **Windows script catalog** and an optional combined Fortis/RDG Control Center. The five built-in worker entries point to this stable Windows Git clone. Repo 1/2 and shared Fortis adapters now resolve their executable worker/launcher source only from the sibling `%USERPROFILE%\Repos\tunnel` clone, verify its pinned manifest and all eight SHA-256 values, and fail closed if that clone is missing, dirty, off `main`, or stale. This source change is **not** proof of a successful Windows reconnect.
 
 ## What it does
 
@@ -12,9 +12,9 @@ Source for the standalone **Windows script catalog** and an optional combined Fo
 
 ## Canonical Git-to-Windows source (transition)
 
-The intended workflow is **Docker Git checkout → commit/push → Windows clone fast-forward pull → manual acceptance → explicit run**. The Desktop `Fortis RDG Control Center.lnk` shortcut targets **`Start-ScriptCatalog.ps1`** in the Windows Git clone, not `Start-ControlCenter.ps1` or `%LOCALAPPDATA%` copies. The bundled workers now use relative `launchers/` paths for Repo 1/2 and shared Fortis Guard. Runtime credentials and profiles stay local to Windows; the RDG updater itself is still an external dependency. Source checkout does **not** restart a live tunnel or prove cold-start compatibility.
+The intended workflow is **Docker Git checkouts → commit/push both repos → Windows fast-forward pull of both sibling clones → read-only preflight → controlled per-tunnel restart**. The Desktop `Fortis RDG Control Center.lnk` shortcut targets **`Start-ScriptCatalog.ps1`** in `%USERPROFILE%\Repos\script-control-center`, not `Start-ControlCenter.ps1` or `%LOCALAPPDATA%` copies. The catalog's Repo1/Repo2 adapters call `Get-TunnelWindowsMirror.ps1`, which accepts only `%USERPROFILE%\Repos\tunnel\runtime\windows-repo\current`, checks both canonical clean `main` clones and the pinned eight-file manifest, then delegates to the worker chain there. Updater/Watcher adapters resolve shared `Common.ps1` / `Start-Fortis.ps1` from the same tunnel mirror. The old `script-control-center\launchers` copies are retained for source history/contract tests, **not used by the Script Center workers**. Runtime binaries, credentials, profiles and logs stay in their documented Windows-local locations; the RDG updater remains an external dependency. Pulling source does **not** restart a live tunnel or prove reconnect compatibility.
 
-See [Git-to-Windows operating procedure](docs/GIT-WINDOWS-SOURCE-OF-TRUTH.md) and `tools/Update-Windows-ControlCenter.ps1` (read-only preview by default, explicit `-Apply` for guarded pull and shortcut repair). The five registered workers retain absolute paths to the stable Windows clone; **do not reimport them after each Git pull**. **After changing Docker**, update the corresponding resource/pin checks and verify both launchers before terminating the last working Fortis Repo connection. Repo 2 is not yet confirmed to reconnect using the cloned-source launcher.
+See [Git-to-Windows operating procedure](docs/GIT-WINDOWS-SOURCE-OF-TRUTH.md) and `tools/Update-Windows-ControlCenter.ps1` (read-only by default; explicit `-Apply` fast-forwards `tunnel` first and `script-control-center` second, validates the mirror, compiles the WinForms sources, runs read-only Repo1/Repo2 Previews, then repairs the existing shortcut). The five catalog registrations retain their absolute paths to the stable Script Center clone; **do not reimport them after pulls**. Do not stop the Fortis Docker container as part of this source update: preserve it and restart Repo1/Repo2 Windows tunnel processes one at a time after both previews pass. Real reconnect is still unverified until Windows acceptance.
 
 ## Зеркальная директория репозиториев (Docker ↔ Windows)
 
@@ -47,15 +47,18 @@ git -C $repo remote -v
 git -C $repo rev-parse HEAD
 ```
 
-Команда **только создаёт или проверяет клон**. На текущей Windows-машине ярлык уже направлен на `Start-ScriptCatalog.ps1`, а пять регистраций обновлены до worker-файлов в клоне. Дальнейшее обновление после `git push`:
+Команда **только создаёт или проверяет клон**. На текущей Windows-машине ярлык уже направлен на `Start-ScriptCatalog.ps1`, а пять регистраций обновлены до worker-файлов в клоне. Дальнейшее обновление после `git push` должно обновить **оба** соседних клона — сначала `tunnel`, затем `script-control-center`. Из Windows PowerShell можно выполнить:
 
 ```powershell
-$repo = Join-Path $env:USERPROFILE 'Repos\script-control-center'
-git -C $repo pull --ff-only origin main
-if ($LASTEXITCODE -ne 0) { throw 'Git pull не завершился успешно' }
+$repos = Join-Path $env:USERPROFILE 'Repos'
+foreach ($name in @('tunnel','script-control-center')) {
+    $repo = Join-Path $repos $name
+    git -C $repo pull --ff-only origin main
+    if ($LASTEXITCODE -ne 0) { throw "Git pull failed: $name" }
+}
 ```
 
-Повторно создавать ярлык и импортировать штатный набор после обычного `pull` **не нужно**. Новые файлы используются при следующем запуске каталога или отдельного worker-процесса, уже работающие процессы не заменяются. `tools/Update-Windows-ControlCenter.ps1 -Apply` предназначен для отдельной предварительной проверки/восстановления ярлыка и **не требуется при каждом обновлении**. Не удалять другие репозитории из `Repos`; не путать Windows-клон с `/workspace/repo/Repos`.
+Либо запустить `tools\Update-Windows-ControlCenter.ps1 -Apply` из Script Center clone: он предварительно проверяет оба чистых `main` клона, обновляет `tunnel` первым, затем Script Center, проверяет восемь файлов зеркала и запускает только read-only Previews. Повторно создавать ярлык и импортировать штатный набор после pull **не нужно**. Уже работающие процессы не заменяются. Не удалять другие репозитории из `Repos`; не путать Windows-клоны с `/workspace/repo/Repos` в Docker.
 
 ## Скрипт-центр: стабильный журнал и внешние PowerShell-запуски
 
@@ -155,6 +158,35 @@ is a no-op with no Git call. The branch-menu cleanup is deferred until after
 its WinForms close/click handlers return. Docker read-only export never
 fetches, pushes or changes a worktree. The owner-only actions are:
 
+- `Stage Docker` opens a checklist of current **active Docker** working-tree
+  changes (nothing selected by default). Only checked Git-reported paths are
+  staged with literal Git pathspecs. The preview includes an SHA-256 digest of
+  the complete NUL-delimited porcelain status; Stage rechecks active branch,
+  HEAD and that exact digest before writing. No blanket `git add -A` and no
+  Windows Git write. For safety, more than 500 changed entries require direct
+  owner-controlled Docker Git instead of using the GUI.
+- `Commit Docker` previews **all currently staged/indexed files**, asks for an
+  explicit message (UTF-8; may contain newlines), and requires confirmation.
+  The helper checks the SHA-256 of the raw staged index diff plus active
+  Docker branch and HEAD before running normal `git commit` with hooks and
+  signing disabled. A Commit does not stage remaining unstaged files. Changes
+  appearing between preview and commit invalidate the digest.
+- `Push Docker` previews Docker HEAD and the exact current GitHub branch SHA
+  via `ls-remote`, then requests confirmation. It rechecks active branch,
+  HEAD and GitHub SHA; pushes **only** `HEAD:refs/heads/<active-branch>`
+  using standard non-forcing `git push`. No force, automatic Windows Pull,
+  branch switch, tagging or service restart. Uncommitted working-tree files
+  are never included in a Push. A not-yet-published branch requires its own
+  confirmation as part of the same Push dialog. Authentication errors stop
+  the operation rather than prompting through the UI.
+- These three buttons call `tools/Docker-Mirror-Git-Actions.py` **inside**
+  `fortis-repo-test` as uid 1000; the Windows process is a UI/controller only.
+  The operation target is always the **actual active Docker branch**, not
+  the branch selected for viewing. Stage/Commit/Push are blocked for protected
+  infrastructure names (`tunnel`, `rd-graphs`, `script-control-center`,
+  `security`) in this workflow, to avoid changing service-critical
+  repositories through a general status UI. Use a deliberate Docker
+  development/review workflow to modify those repositories.
 - `Pull Windows` only for one verified clean Windows clone, the currently
   active **and viewed** Windows branch, approved Docker/Windows origin, and
   confirmed `WindowsAhead == 0`, `WindowsBehind > 0`. It confirms the exact
@@ -184,12 +216,24 @@ old main-only Windows commit-all remain in the unused legacy UI source; the
 new GUI does not import old `FORTIS_DOCKER_STATUS_V1` TSV files. The new
 Docker branch snapshot is `FORTIS_DOCKER_BRANCH_V2` (name, active branch,
 HEAD, dirty count, local branches, approved origin) and is not stored in Git.
+In addition to the unchanged 13 column-detail lines, the details area lists
+changed files **separately for the active Docker and Windows worktrees**, below
+`ДОПОЛНИТЕЛЬНЫЕ СВЕДЕНИЯ`. Each item includes the Git porcelain status
+(` M` = modified, `A ` = staged addition, ` D` = deletion, `??` = untracked,
+etc.) and its path. The Docker exporter carries each status record as a
+base64-encoded `F` line, so tabs, spaces and Git-quoted filenames do not
+corrupt the snapshot. Windows reads `git status --porcelain=v1` locally,
+without changing files. Both lists describe the **currently active branches**
+regardless of which branches are selected for viewing. File lists are
+limited to the first 500 entries per environment/repository; if there are
+more entries or a status read fails, the UI explicitly marks the list as
+partial/unavailable instead of reporting a clean worktree.
 
 **Verification:** offline Linux source/fixture tests and Docker exporter can be
 checked without touching live state:
 
 ```bash
-python3 -B -m unittest test_mirror_workflow_source test_mirror_status_source test_mirror_git_history
+python3 -B -m unittest test_mirror_docker_actions test_mirror_workflow_source test_mirror_status_source test_mirror_git_history
 python3 -B tools/Export-Docker-Branch-Workflow.py --stdout --repo visual-workspace
 ```
 

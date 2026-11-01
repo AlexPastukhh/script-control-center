@@ -15,9 +15,17 @@ using System.Windows.Forms;
 namespace FortisMirror {
   internal sealed class WfCommand {
     internal bool Ok;
+    internal bool OutputTruncated;
     internal bool Timeout;
     internal string Text = "";
     internal string Error = "";
+  }
+  internal sealed class WfGitPreview {
+    internal string Branch = "";
+    internal string Head = "";
+    internal string Digest = "";
+    internal string RemoteSha = "";
+    internal readonly List<string> Files = new List<string>();
   }
   internal sealed class WfBranch {
     internal string Name = "";
@@ -34,6 +42,8 @@ namespace FortisMirror {
     internal string DockerActive = "";
     internal string DockerHead = "";
     internal int DockerChanges = -1;
+    internal readonly List<string> DockerFiles = new List<string>();
+    internal readonly List<string> WindowsFiles = new List<string>();
     internal string DockerView = "";
     internal string WindowsView = "";
     internal string WindowsPath = "";
@@ -72,12 +82,16 @@ namespace FortisMirror {
     private const string DockerContainer = "fortis-repo-test";
     private const string Exporter =
       "/workspace/repo/Repos/script-control-center/tools/Export-Docker-Branch-Workflow.py";
+    private const string DockerGitActions =
+      "/workspace/repo/Repos/script-control-center/tools/Docker-Mirror-Git-Actions.py";
     private static readonly Regex SafeRepo =
       new Regex(@"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,119}$", RegexOptions.CultureInvariant);
     private static readonly Regex SafeBranch =
       new Regex(@"^[A-Za-z0-9_][A-Za-z0-9_./-]{0,159}$", RegexOptions.CultureInvariant);
     private static readonly Regex Sha =
       new Regex(@"^[0-9a-f]{40}$", RegexOptions.CultureInvariant);
+    private static readonly Regex Digest =
+      new Regex(@"^[0-9a-f]{64}$", RegexOptions.CultureInvariant);
     private static readonly Regex AllowedOrigin =
       new Regex(@"^(?:https://github\.com/|git@github\.com:)AlexPastukhh/[A-Za-z0-9_.-]+(?:\.git)?$",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
@@ -91,6 +105,9 @@ namespace FortisMirror {
     private readonly Button checkSelected = Button("Проверить выбранные", 180);
     private readonly Button checkAll = Button("Проверить все", 130);
     private readonly Button pull = Button("Pull Windows", 140);
+    private readonly Button stageDocker = Button("Stage Docker", 115);
+    private readonly Button commitDocker = Button("Commit Docker", 120);
+    private readonly Button pushDocker = Button("Push Docker", 115);
     private readonly Button copy = Button("Копировать пути", 145);
     private readonly Button refresh = Button("Обновить список", 140);
     private readonly Button cancel = Button("Отмена проверки", 145);
@@ -142,7 +159,8 @@ namespace FortisMirror {
       var actions = new FlowLayoutPanel { Dock = DockStyle.Fill,
         WrapContents = true, AutoScroll = true };
       foreach (var b in new Button[] {
-        checkSelected, checkAll, pull, copy, refresh, cancel
+        checkSelected, checkAll, stageDocker, commitDocker, pushDocker,
+        pull, copy, refresh, cancel
       }) actions.Controls.Add(b);
       heading.Controls.Add(actions);
       heading.Controls.Add(title);
@@ -173,6 +191,9 @@ namespace FortisMirror {
       checkSelected.Click += delegate { BeginCheck(false); };
       checkAll.Click += delegate { BeginCheck(true); };
       pull.Click += delegate { BeginPull(); };
+      stageDocker.Click += delegate { BeginDockerGitPreview("stage"); };
+      commitDocker.Click += delegate { BeginDockerGitPreview("commit"); };
+      pushDocker.Click += delegate { BeginDockerGitPreview("push"); };
       copy.Click += delegate { CopyPaths(); };
       refresh.Click += delegate { BeginRefresh(false); };
       cancel.Click += delegate { if (cancellation != null) cancellation.Cancel(); };
@@ -244,7 +265,9 @@ namespace FortisMirror {
           object gate = new object();
           p.OutputDataReceived += delegate(object sender, DataReceivedEventArgs e) {
             if (e.Data != null) lock (gate) {
-              if (stdout.Length < 1048576) stdout.AppendLine(e.Data);
+              if (stdout.Length + e.Data.Length + Environment.NewLine.Length <= 1048576)
+                stdout.AppendLine(e.Data);
+              else result.OutputTruncated = true;
             }
           };
           p.ErrorDataReceived += delegate(object sender, DataReceivedEventArgs e) {
@@ -269,10 +292,12 @@ namespace FortisMirror {
             }
           }
           if (!stopped) p.WaitForExit();
-          result.Ok = !stopped && p.ExitCode == 0;
+          result.Ok = !stopped && p.ExitCode == 0 && !result.OutputTruncated;
           lock (gate) {
             result.Text = stdout.ToString().TrimEnd('\r', '\n');
-            result.Error = result.Ok ? "" : result.Timeout ? "ТАЙМАУТ" : SafeError(stderr.ToString());
+            result.Error = result.Ok ? "" : result.OutputTruncated ?
+              "ОТВЕТ СЛИШКОМ ДЛИННЫЙ" : result.Timeout ? "ТАЙМАУТ" :
+              SafeError(stderr.ToString());
           }
         }
       } catch (Exception) { result.Error = "ОШИБКА ЗАПУСКА"; }
@@ -319,6 +344,17 @@ namespace FortisMirror {
             DockerOrigin = part[5] == "-" ? "" : part[5],
             WindowsPath = Path.Combine(root, part[1]) };
           lookup.Add(r.Name, r); found.Add(r);
+        } else if (part[0] == "F") {
+          WfRepo repo;
+          if (part.Length != 3 || !lookup.TryGetValue(part[1], out repo) ||
+            part[2].Length > 16384 || repo.DockerFiles.Count >= 500) return false;
+          try {
+            string entry = new UTF8Encoding(false, true).GetString(
+              Convert.FromBase64String(part[2]));
+            if (!ValidChangeEntry(entry)) return false;
+            repo.DockerFiles.Add(entry);
+          } catch (FormatException) { return false; }
+          catch (DecoderFallbackException) { return false; }
         } else if (part[0] == "B") {
           WfRepo repo;
           if (part.Length != 4 || !lookup.TryGetValue(part[1], out repo) ||
@@ -334,6 +370,60 @@ namespace FortisMirror {
           Directory.Exists(Path.Combine(r.WindowsPath, ".git"));
       }
       return true;
+    }
+    private static bool ValidChangeEntry(string entry) {
+      // Porcelain v1: two Git status columns, one space, then the path.
+      // Git quotes control characters in filenames, so each entry is one line.
+      return !String.IsNullOrEmpty(entry) && entry.Length >= 4 &&
+        entry.Length <= 8192 && entry[2] == ' ' &&
+        entry.IndexOf('\0') < 0 && entry.IndexOf('\r') < 0 &&
+        entry.IndexOf('\n') < 0;
+    }
+    private static string ChangeKind(char code) {
+      switch (code) {
+        case 'M': return "изменён";
+        case 'A': return "добавлен";
+        case 'D': return "удалён";
+        case 'R': return "переименован";
+        case 'C': return "скопирован";
+        case 'T': return "изменён тип";
+        case 'U': return "конфликт";
+        default: return "код " + code;
+      }
+    }
+    private static string ChangeDescription(string entry) {
+      string path = entry.Substring(3);
+      string codes = entry.Substring(0, 2);
+      if (codes == "??") return "[??] Новый неотслеживаемый файл: " + path;
+      if (codes == "!!") return "[!!] Игнорируется Git: " + path;
+      var meaning = new StringBuilder();
+      if (entry[0] != ' ')
+        meaning.Append("индекс: ").Append(ChangeKind(entry[0]));
+      if (entry[1] != ' ') {
+        if (meaning.Length > 0) meaning.Append("; ");
+        meaning.Append("рабочая папка: ").Append(ChangeKind(entry[1]));
+      }
+      return "[" + codes + "] " + meaning + ": " + path;
+    }
+    private static void AppendChangedFiles(StringBuilder output, string side,
+      string activeBranch, int count, List<string> entries) {
+      output.AppendLine();
+      output.AppendLine(side + " · ИЗМЕНЁННЫЕ ФАЙЛЫ (активная ветка: " +
+        (activeBranch.Length > 0 ? activeBranch : "НЕИЗВЕСТНО") + ")");
+      if (count < 0) {
+        output.AppendLine("Не проверено или Git status завершился с ошибкой.");
+      } else if (count == 0) {
+        output.AppendLine("Нет изменений в рабочей папке.");
+      } else {
+        output.AppendLine("Всего изменений по Git status: " + count);
+        if (entries.Count == 0)
+          output.AppendLine("Список файлов недоступен: требуется новая проверка.");
+        else foreach (string entry in entries)
+          output.Append("  ").AppendLine(ChangeDescription(entry));
+        if (entries.Count < count)
+          output.AppendLine("Показано " + entries.Count + " из " + count +
+            " записей; список ограничен 500 записями или неполон.");
+      }
     }
     private static bool ParseCounts(string s, out int ahead, out int behind) {
       ahead = behind = -1;
@@ -394,6 +484,13 @@ namespace FortisMirror {
       r.WindowsHead = head.Ok && Sha.IsMatch(head.Text) ? head.Text : "";
       var dirty = Git(r.WindowsPath, "status --porcelain=v1 --untracked-files=all", 9000, token);
       r.WindowsChanges = dirty.Ok ? (dirty.Text.Length == 0 ? 0 : dirty.Text.Split('\n').Length) : -1;
+      if (dirty.Ok && dirty.Text.Length > 0) {
+        foreach (string entry in dirty.Text.Split('\n')) {
+          if (r.WindowsFiles.Count >= 500) break;
+          string cleanEntry = entry.TrimEnd('\r');
+          if (ValidChangeEntry(cleanEntry)) r.WindowsFiles.Add(cleanEntry);
+        }
+      }
       var branches = Git(r.WindowsPath,
         "for-each-ref --format=%(refname:short)%09%(objectname) refs/heads",
         8000, token);
@@ -574,6 +671,16 @@ namespace FortisMirror {
       cancel.Enabled = working && !writing;
       copy.Enabled = !working && Selected() != null;
       pull.Enabled = !working && CanPull(Selected());
+      WfRepo activeDocker = Selected();
+      bool usableDocker = !working && activeDocker != null &&
+        SafeRepo.IsMatch(activeDocker.Name) &&
+        ValidBranch(activeDocker.DockerActive) &&
+        Sha.IsMatch(activeDocker.DockerHead) &&
+        ValidOrigin(activeDocker.DockerOrigin) &&
+        !Protected.Contains(activeDocker.Name);
+      stageDocker.Enabled = usableDocker && activeDocker.DockerChanges > 0;
+      commitDocker.Enabled = usableDocker && activeDocker.DockerChanges > 0;
+      pushDocker.Enabled = usableDocker;
       otherDocker.Enabled = !working && Selected() != null;
       otherWindows.Enabled = !working && Selected() != null;
       // Freeze selection while owner-approved Git writes update a worktree.
@@ -626,6 +733,15 @@ namespace FortisMirror {
       b.AppendLine("Windows HEAD активной ветки: " + (r.WindowsHead.Length > 0 ? r.WindowsHead : "—"));
       b.AppendLine("Docker origin: " + (r.DockerOrigin.Length > 0 ? r.DockerOrigin : "НЕ ПРОВЕРЕН"));
       b.AppendLine("Просмотр ветки не выполняет checkout ни в Docker, ни в Windows.");
+      b.AppendLine();
+      b.AppendLine("ИЗМЕНЁННЫЕ ФАЙЛЫ В АКТИВНЫХ ВЕТКАХ (read-only git status)");
+      AppendChangedFiles(b, "DOCKER", r.DockerActive, r.DockerChanges, r.DockerFiles);
+      if (r.WindowsExists)
+        AppendChangedFiles(b, "WINDOWS", r.WindowsActive, r.WindowsChanges, r.WindowsFiles);
+      else {
+        b.AppendLine();
+        b.AppendLine("WINDOWS · ИЗМЕНЁННЫЕ ФАЙЛЫ: клона нет.");
+      }
       if (showOtherDocker) {
         foreach (string name in r.SortedBranches()) {
           if (name == r.DockerView) continue;
@@ -835,6 +951,255 @@ namespace FortisMirror {
               "Pull и checkout выполняйте только после новой проверки.");
           });
         }
+      });
+    }
+
+    // These are Docker-only actions, not Git operations on Windows clones.
+    private WfCommand DockerGitAction(string tail, int timeoutMs, CancellationToken token,
+      bool write = false) {
+      return Run("docker.exe", "exec --user 1000:1000 " + DockerContainer +
+        " python3 -B " + DockerGitActions + " " + tail, timeoutMs, token, write);
+    }
+    private static bool ParseGitPreview(string text, string operation, out WfGitPreview result) {
+      result = new WfGitPreview();
+      if (text.Length > 1048576) return false;
+      string[] rows = text.Replace("\r\n", "\n").Split('\n');
+      string marker = operation == "stage" ? "FORTIS_DOCKER_STAGE_V1" :
+        operation == "commit" ? "FORTIS_DOCKER_COMMIT_V1" : "FORTIS_DOCKER_PUSH_V1";
+      if (rows.Length == 0) return false;
+      string[] parts = rows[0].Split('\t');
+      if (parts[0] != marker) return false;
+      if (operation == "push") {
+        if (parts.Length != 4 || !ValidBranch(parts[1]) ||
+          !Sha.IsMatch(parts[2]) || !Sha.IsMatch(parts[3])) return false;
+        result.Branch = parts[1]; result.Head = parts[2];
+        result.RemoteSha = parts[3];
+        return rows.Length <= 2 && (rows.Length == 1 || rows[1].Length == 0);
+      }
+      int count;
+      if (parts.Length != 5 || !ValidBranch(parts[1]) ||
+        !Sha.IsMatch(parts[2]) || !Digest.IsMatch(parts[3]) ||
+        !Int32.TryParse(parts[4], out count) || count < 0 || count > 500) return false;
+      result.Branch = parts[1]; result.Head = parts[2]; result.Digest = parts[3];
+      int index = 0;
+      for (int i = 1; i < rows.Length; i++) {
+        if (rows[i].Length == 0 && i == rows.Length - 1) break;
+        string[] item = rows[i].Split('\t');
+        if (operation == "stage") {
+          if (item.Length != 3 || item[0] != "F" ||
+            item[1] != index.ToString(CultureInfo.InvariantCulture)) return false;
+        } else if (item.Length != 2 || item[0] != "F") return false;
+        string encoded = item[operation == "stage" ? 2 : 1];
+        if (encoded.Length == 0 || encoded.Length > 16384) return false;
+        try {
+          string file = new UTF8Encoding(false, true).GetString(
+            Convert.FromBase64String(encoded));
+          if (file.Length == 0 || file.Length > 8192 ||
+            file.IndexOf('\0') >= 0) return false;
+          result.Files.Add(file);
+        } catch (FormatException) { return false; }
+        catch (DecoderFallbackException) { return false; }
+        index++;
+      }
+      return index == count;
+    }
+    private int[] ChooseDockerStageFiles(WfRepo r, WfGitPreview preview) {
+      using (var dialog = new Form()) {
+        dialog.Text = "Docker Stage — " + r.Name;
+        dialog.Size = new Size(860, 570);
+        dialog.MinimumSize = new Size(620, 420);
+        dialog.StartPosition = FormStartPosition.CenterParent;
+        dialog.Font = Font;
+        var heading = new Label { Dock = DockStyle.Top, Height = 65,
+          Padding = new Padding(10, 8, 10, 0),
+          Text = "ТОЛЬКО DOCKER · активная ветка: " + preview.Branch +
+            "\nHEAD: " + preview.Head +
+            "\nОтметьте конкретные файлы для Stage. Ничего не отмечено по умолчанию." };
+        var checks = new CheckedListBox { Dock = DockStyle.Fill,
+          CheckOnClick = true, HorizontalScrollbar = true };
+        foreach (string file in preview.Files) checks.Items.Add(file, false);
+        var controls = new FlowLayoutPanel { Dock = DockStyle.Bottom,
+          FlowDirection = FlowDirection.RightToLeft, Height = 46,
+          Padding = new Padding(8) };
+        var accept = new Button { Text = "Stage выбранные", Width = 154,
+          DialogResult = DialogResult.OK };
+        var close = new Button { Text = "Отмена", Width = 100,
+          DialogResult = DialogResult.Cancel };
+        var all = new Button { Text = "Отметить все", Width = 120 };
+        all.Click += delegate {
+          for (int i = 0; i < checks.Items.Count; i++) checks.SetItemChecked(i, true);
+        };
+        var none = new Button { Text = "Снять отметки", Width = 120 };
+        none.Click += delegate {
+          for (int i = 0; i < checks.Items.Count; i++) checks.SetItemChecked(i, false);
+        };
+        controls.Controls.Add(accept); controls.Controls.Add(close);
+        controls.Controls.Add(none); controls.Controls.Add(all);
+        dialog.Controls.Add(checks); dialog.Controls.Add(controls);
+        dialog.Controls.Add(heading);
+        dialog.AcceptButton = accept; dialog.CancelButton = close;
+        if (dialog.ShowDialog(this) != DialogResult.OK) return null;
+        var choices = new List<int>();
+        foreach (int idx in checks.CheckedIndices) choices.Add(idx);
+        if (choices.Count == 0) {
+          MessageBox.Show(this, "Не выбран ни один файл для Stage.",
+            "Docker Stage", MessageBoxButtons.OK, MessageBoxIcon.Information);
+          return null;
+        }
+        return choices.ToArray();
+      }
+    }
+    private string AskDockerCommitMessage(WfRepo r, WfGitPreview preview) {
+      using (var dialog = new Form()) {
+        dialog.Text = "Docker Commit — " + r.Name;
+        dialog.Size = new Size(810, 560);
+        dialog.MinimumSize = new Size(580, 410);
+        dialog.StartPosition = FormStartPosition.CenterParent;
+        dialog.Font = Font;
+        var heading = new Label { Dock = DockStyle.Top, Height = 58,
+          Padding = new Padding(10, 8, 10, 0),
+          Text = "ТОЛЬКО DOCKER · активная ветка: " + preview.Branch +
+            "\nКоммит содержит ВСЕ уже подготовленные изменения индекса Git." };
+        var messageLabel = new Label { Dock = DockStyle.Top, Height = 22,
+          Text = "Сообщение коммита (обязательно, максимум 4000 символов):" };
+        var message = new TextBox { Dock = DockStyle.Top, Multiline = true,
+          MaxLength = 4000, Height = 89, ScrollBars = ScrollBars.Vertical };
+        var stagedLabel = new Label { Dock = DockStyle.Top, Height = 24,
+          Text = "Будут включены эти подготовленные файлы:" };
+        var files = new TextBox { Dock = DockStyle.Fill, Multiline = true,
+          ReadOnly = true, ScrollBars = ScrollBars.Vertical, WordWrap = false,
+          Text = String.Join(Environment.NewLine, preview.Files.ToArray()) };
+        var buttons = new FlowLayoutPanel { Dock = DockStyle.Bottom,
+          FlowDirection = FlowDirection.RightToLeft, Height = 44 };
+        var ok = new Button { Text = "Commit Docker", Width = 132,
+          DialogResult = DialogResult.OK };
+        var cancelCommit = new Button { Text = "Отмена", Width = 99,
+          DialogResult = DialogResult.Cancel };
+        buttons.Controls.Add(ok); buttons.Controls.Add(cancelCommit);
+        dialog.Controls.Add(files); dialog.Controls.Add(buttons);
+        dialog.Controls.Add(stagedLabel); dialog.Controls.Add(message);
+        dialog.Controls.Add(messageLabel); dialog.Controls.Add(heading);
+        dialog.AcceptButton = ok; dialog.CancelButton = cancelCommit;
+        if (dialog.ShowDialog(this) != DialogResult.OK) return null;
+        if (message.Text.Length == 0 || message.Text.Trim().Length == 0 ||
+            message.Text != message.Text.Trim()) {
+          MessageBox.Show(this, "Введите непустое сообщение коммита без пробелов по краям.",
+            "Docker Commit", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+          return null;
+        }
+        return message.Text;
+      }
+    }
+    private void BeginDockerGitPreview(string operation) {
+      WfRepo r = Selected();
+      if (working || r == null || !SafeRepo.IsMatch(r.Name) ||
+        !ValidBranch(r.DockerActive) || !Sha.IsMatch(r.DockerHead) ||
+        !ValidOrigin(r.DockerOrigin) || Protected.Contains(r.Name)) return;
+      string repoName = r.Name;
+      working = true; writing = false;
+      cancellation = new CancellationTokenSource();
+      CancellationToken token = cancellation.Token;
+      status.Text = "Docker: предпросмотр " + operation + " для " + repoName + "...";
+      Buttons();
+      ThreadPool.QueueUserWorkItem(delegate {
+        WfCommand cmd = DockerGitAction("--repo " + repoName + " --" +
+          operation + "-preview", 70000, token);
+        WfGitPreview preview;
+        bool valid = cmd.Ok && ParseGitPreview(cmd.Text, operation, out preview);
+        if (!valid) preview = null;
+        WfGitPreview ready = preview;
+        Ui(delegate {
+          if (token.IsCancellationRequested) {
+            EndWork("Предпросмотр Docker отменён."); return;
+          }
+          EndWork(valid ? "Предпросмотр Docker " + operation + " готов." :
+            "Не удалось проверить Docker " + operation + ": " + cmd.Error);
+          if (!valid) return;
+          WfRepo current = Selected();
+          if (current == null || current.Name != repoName ||
+            current.DockerActive != ready.Branch || current.DockerHead != ready.Head) {
+            status.Text = "Активная Docker-ветка/HEAD изменились. Повторите проверку.";
+            return;
+          }
+          string tail = "--repo " + repoName + " --expect-branch " + ready.Branch +
+            " --expect-head " + ready.Head;
+          if (operation == "stage") {
+            if (ready.Files.Count == 0) {
+              status.Text = "Нет файлов для Docker Stage."; return;
+            }
+            int[] indexes = ChooseDockerStageFiles(current, ready);
+            if (indexes == null) return;
+            string selectedIndexes = String.Join(",", Array.ConvertAll(indexes,
+              delegate(int n) { return n.ToString(CultureInfo.InvariantCulture); }));
+            string question = "Подготовить в Docker " + indexes.Length +
+              " выбранных файлов?\n\nРепозиторий: " + repoName +
+              "\nАКТИВНАЯ Docker-ветка: " + ready.Branch +
+              "\nWindows не изменяется. Продолжить?";
+            if (MessageBox.Show(this, question, "Подтвердить Docker Stage",
+              MessageBoxButtons.YesNo, MessageBoxIcon.Warning,
+              MessageBoxDefaultButton.Button2) != DialogResult.Yes) return;
+            BeginDockerGitWrite(current, operation, tail +
+              " --stage --expect-digest " + ready.Digest +
+              " --indices " + selectedIndexes);
+          } else if (operation == "commit") {
+            if (ready.Files.Count == 0) {
+              status.Text = "В Docker нет подготовленных файлов для Commit."; return;
+            }
+            string message = AskDockerCommitMessage(current, ready);
+            if (message == null) return;
+            string encoded = Convert.ToBase64String(Encoding.UTF8.GetBytes(message));
+            if (MessageBox.Show(this,
+              "Создать коммит в АКТИВНОЙ Docker-ветке?\n" + ready.Branch +
+              "\nФайлов в индексе: " + ready.Files.Count +
+              "\nСообщение:\n" + message + "\n\nWindows не изменяется.",
+              "Подтвердить Docker Commit",
+              MessageBoxButtons.YesNo, MessageBoxIcon.Warning,
+              MessageBoxDefaultButton.Button2) != DialogResult.Yes) return;
+            BeginDockerGitWrite(current, operation, tail +
+              " --commit --expect-digest " + ready.Digest +
+              " --message-b64 " + encoded);
+          } else if (operation == "push") {
+            string remote = ready.RemoteSha == new String('0', 40) ?
+              "На GitHub ветка ещё не опубликована" : ready.RemoteSha;
+            if (ready.Head == ready.RemoteSha) {
+              status.Text = "Docker GitHub уже совпадают: " + ready.Head; return;
+            }
+            if (MessageBox.Show(this,
+              "Отправить только АКТИВНУЮ Docker-ветку на GitHub?\n\n" +
+              "Репозиторий: " + repoName + "\nВетка: " + ready.Branch +
+              "\nDocker HEAD: " + ready.Head + "\nGitHub: " + remote +
+              "\n\nБез force. Незакоммиченные изменения НЕ отправляются." +
+              "\nWindows не обновляется. Продолжить?",
+              "Подтвердить Docker Push",
+              MessageBoxButtons.YesNo, MessageBoxIcon.Warning,
+              MessageBoxDefaultButton.Button2) != DialogResult.Yes) return;
+            BeginDockerGitWrite(current, operation, tail +
+              " --push --expect-remote " + ready.RemoteSha);
+          }
+        });
+      });
+    }
+    private void BeginDockerGitWrite(WfRepo repo, string operation, string args) {
+      if (working || Selected() != repo || Protected.Contains(repo.Name)) return;
+      writing = true; working = true;
+      cancellation = new CancellationTokenSource();
+      status.Text = "Docker: выполняется " + operation + " для " + repo.Name + "...";
+      Buttons();
+      ThreadPool.QueueUserWorkItem(delegate {
+        // No cancellation while Git is mutating the Docker index/history/remote.
+        WfCommand answer = DockerGitAction(args, 240000, CancellationToken.None, true);
+        bool ok = answer.Ok &&
+          answer.Text.StartsWith(operation == "stage" ? "STAGED\t" :
+            operation == "commit" ? "COMMITTED\t" : "PUSHED\t",
+            StringComparison.Ordinal);
+        Ui(delegate {
+          EndWork(ok ? "Docker " + operation + " завершён: " + answer.Text :
+            "Docker " + operation + " не выполнен: " + answer.Error +
+            ". Состояние Git требуется проверить.");
+          // Refresh the same selected Docker/GitHub/Windows row after operation,
+          // regardless of success; never mutate another repo or view branch.
+          BeginCheck(false);
+        });
       });
     }
 

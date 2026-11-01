@@ -6,6 +6,7 @@ through the Windows UI and strictly checks current branch, SHA and cleanliness.
 No network, fetch, push, checkout on read, Docker socket or credentials.
 """
 import argparse
+import base64
 from datetime import datetime, timezone
 import os
 from pathlib import Path
@@ -54,7 +55,7 @@ def git(repo, *args):
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=20, env=env,
             check=False,
         )
-        return p.stdout.decode("utf-8", errors="replace").strip() if p.returncode == 0 else None
+        return p.stdout.decode("utf-8", errors="replace").rstrip("\r\n") if p.returncode == 0 else None
     except (OSError, subprocess.TimeoutExpired):
         return None
 
@@ -72,6 +73,14 @@ def snapshot_one(repo):
     changes = git(repo, "status", "--porcelain=v1", "--untracked-files=all")
     changed = -1 if changes is None else len(changes.splitlines()) if changes else 0
     rows = ["R\t{}\t{}\t{}\t{}\t{}".format(repo.name, active, head.lower(), changed, origin)]
+    # F records are base64-encoded single porcelain-v1 lines so that spaces,
+    # tabs, renames and quoted paths cannot corrupt the tab-separated protocol.
+    # R.changed remains the FULL count; details are bounded for UI safety.
+    if changes is not None:
+        for entry in changes.splitlines()[:500]:
+            if entry:
+                encoded = base64.b64encode(entry.encode("utf-8")).decode("ascii")
+                rows.append("F\t{}\t{}".format(repo.name, encoded))
     listing = git(repo, "for-each-ref", "--format=%(refname:short)%09%(objectname)", "refs/heads")
     if listing is None:
         return rows
