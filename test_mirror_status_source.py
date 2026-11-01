@@ -192,7 +192,8 @@ class MirrorInspectorSourceChecks(unittest.TestCase):
         for value in ('param([switch]$Apply)', 'if (-not $Apply)', 'stash push --include-untracked',
                       'fetch --no-tags --no-recurse-submodules origin main',
                       'merge --ff-only', 'FETCH_HEAD', 'originPattern',
-                      'core.hooksPath=/dev/null', 'Get-GitValue', 'GIT_TERMINAL_PROMPT'):
+                      'core.hooksPath=/dev/null', 'Get-GitValue', 'GIT_TERMINAL_PROMPT',
+                      'AlreadyUpdated', 'if ($plan.AlreadyUpdated)', 'Write-Host $afterStash'):
             self.assertIn(value, script)
         self.assertNotIn('stash drop', script.lower().split('param([switch]$Apply)')[-1].split('Write-Host')[0])
         self.assertNotIn('reset --hard', script)

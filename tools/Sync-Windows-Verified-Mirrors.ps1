@@ -1,7 +1,9 @@
-#requires -Version 5.1
+﻿#requires -Version 5.1
 <#
-Read-only preview by default. Explicit -Apply backs up uncommitted work in
-local Git stash and fast-forwards only three hash-verified Windows clones.
+Read-only preview by default. Safe resume is supported after partial success:
+clones already at the pinned target commit are checked and skipped.
+Explicit -Apply backs up uncommitted work in local Git stash and fast-forwards
+only three hash-verified Windows clones.
 Never drops stashes, resets, cleans, pushes or restarts programs.
 Does not touch obs-planning-docs, security, rd-graphs or obs.
 #>
@@ -63,10 +65,16 @@ foreach ($target in $targets) {
     $origin = Get-GitValue $path @('remote', 'get-url', 'origin')
     $originPattern = '^(https://github\.com/|git@github\.com:)AlexPastukhh/' +
         [regex]::Escape($target.Github) + '(\.git)?$'
-    if ($branch -ne 'main' -or $head -ne $target.Old -or $origin -notmatch $originPattern) {
+    if ($branch -ne 'main' -or $origin -notmatch $originPattern -or
+        ($head -ne $target.Old -and $head -ne $target.New)) {
         throw "Safety preflight failed: $($target.Folder); branch=$branch; HEAD=$head"
     }
     $dirty = Get-GitValue $path @('status', '--porcelain=v1', '--untracked-files=all')
+    if ($head -eq $target.New -and $dirty.Length -ne 0) {
+        Write-Warning "Already at target SHA but working tree is dirty: $($target.Folder)"
+        Write-Host $dirty
+        throw "Inspect Windows changes before proceeding: $($target.Folder)"
+    }
     $remoteLines = @(& git.exe -c http.sslBackend=openssl -c http.sslVerify=true -C $path ls-remote --exit-code origin refs/heads/main)
     if ($LASTEXITCODE -ne 0 -or $remoteLines.Count -ne 1) {
         throw "Cannot verify GitHub main: $($target.Folder)"
@@ -81,11 +89,12 @@ foreach ($target in $targets) {
         Old = $target.Old
         New = $target.New
         Dirty = ($dirty.Length -gt 0)
+        AlreadyUpdated = ($head -eq $target.New)
     }
 }
 
 Write-Host 'Verified Windows mirrors before changes:'
-$plans | Select-Object Name, Dirty, Old, New | Format-Table -AutoSize
+$plans | Select-Object Name, Dirty, AlreadyUpdated, Old, New | Format-Table -AutoSize
 if (-not $Apply) {
     Write-Host 'Preview only. No changes. Use -Apply after reviewing running software.'
     return
@@ -95,13 +104,19 @@ $stamp = (Get-Date).ToUniversalTime().ToString('yyyyMMdd-HHmmss')
 foreach ($plan in $plans) {
     Write-Host ''
     Write-Host ('=== ' + $plan.Name + ' ===')
+    if ($plan.AlreadyUpdated) {
+        Write-Host "Already clean at expected GitHub SHA: $($plan.Name). Skipped."
+        continue
+    }
     if ($plan.Dirty) {
         $message = "Fortis Windows mirror backup before FF $stamp $($plan.Name)"
         & git.exe -C $plan.Path stash push --include-untracked --message $message
         if ($LASTEXITCODE -ne 0) { throw "Stash failed: $($plan.Name). No pull attempted." }
         $afterStash = Get-GitValue $plan.Path @('status', '--porcelain=v1', '--untracked-files=all')
         if ($afterStash.Length -ne 0) {
-            throw "Working tree still dirty after stash: $($plan.Name). Stash retained."
+            Write-Warning "Git still reports these Windows files after stash:"
+            Write-Host $afterStash
+            throw "Working tree still dirty after stash: $($plan.Name). Stash retained; no fetch/merge."
         }
         Write-Host "Local stash preserved: $message"
     }
