@@ -175,6 +175,11 @@ class RegistrationChecks(unittest.TestCase):
         self.assertNotIn('Process.GetProcessesByName(',source)
         self.assertNotIn('GetOwnerSid() == null',source)
 
+    def test_command_line_pinvoke_uses_exact_windows_api_entry_points(self):
+        source=(ROOT/'ScriptCatalog.cs').read_text()
+        self.assertIn('[DllImport("shell32.dll", CharSet=CharSet.Unicode, ExactSpelling=true, SetLastError=true)]\n    private static extern IntPtr CommandLineToArgvW',source)
+        self.assertIn('[DllImport("kernel32.dll", ExactSpelling=true)]\n    private static extern IntPtr LocalFree',source)
+
     def test_external_stop_does_not_kill_unrelated_or_children(self):
         source=(ROOT/'ScriptCatalog.cs').read_text()
         stop=source[source.index('private void StopEntry()'):source.index('private void OpenLog()',source.index('private void StopEntry()'))]

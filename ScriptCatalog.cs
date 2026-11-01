@@ -52,9 +52,11 @@ namespace FortisRdgControl {
     private const int EM_LINESCROLL = 0xB6;
     [DllImport("user32.dll", CharSet=CharSet.Auto)]
     private static extern IntPtr SendMessage(IntPtr handle, int msg, IntPtr wParam, IntPtr lParam);
-    [DllImport("shell32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
+    // The API name already includes its W suffix. ExactSpelling prevents
+    // charset name mangling (for example, probing CommandLineToArgvWW).
+    [DllImport("shell32.dll", CharSet=CharSet.Unicode, ExactSpelling=true, SetLastError=true)]
     private static extern IntPtr CommandLineToArgvW(string commandLine, out int argc);
-    [DllImport("kernel32.dll")]
+    [DllImport("kernel32.dll", ExactSpelling=true)]
     private static extern IntPtr LocalFree(IntPtr mem);
     private sealed class BundleDefinition {
       public string Id, Name, FileName;
