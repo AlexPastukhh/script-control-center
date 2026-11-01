@@ -50,7 +50,7 @@ namespace FortisMirror {
     private readonly string root, gitExe;
     private readonly List<RepoRow> repositories = new List<RepoRow>();
     private readonly ListView list = new ListView();
-    private readonly Button checkOne = MakeButton("Проверить выбранный", 175);
+    private readonly Button checkSelected = MakeButton("Проверить выбранные", 195);
     private readonly Button checkAll = MakeButton("Проверить все", 135);
     private readonly Button pullOne = MakeButton("Pull выбранного", 160);
     private readonly Button refresh = MakeButton("Обновить список", 150);
@@ -91,7 +91,7 @@ namespace FortisMirror {
         Dock = DockStyle.Bottom, Height = 46, WrapContents = false,
         FlowDirection = FlowDirection.LeftToRight, AutoScroll = true
       };
-      foreach (Button b in new Button[] { checkOne, checkAll, pullOne, refresh, cancel }) actions.Controls.Add(b);
+      foreach (Button b in new Button[] { checkSelected, checkAll, pullOne, refresh, cancel }) actions.Controls.Add(b);
       cancel.Enabled = false;
       // Dock order: controls added bottom-to-top.
       header.Controls.Add(actions);
@@ -104,7 +104,7 @@ namespace FortisMirror {
       list.FullRowSelect = true;
       list.GridLines = true;
       list.HideSelection = false;
-      list.MultiSelect = false;
+      list.MultiSelect = true;
       list.BackColor = Color.FromArgb(21, 35, 54);
       list.ForeColor = Color.FromArgb(230, 239, 248);
       list.BorderStyle = BorderStyle.FixedSingle;
@@ -131,7 +131,7 @@ namespace FortisMirror {
       footer.Controls.Add(progress);
       layout.Controls.Add(footer, 0, 2);
 
-      checkOne.Click += delegate { BeginCheck(false); };
+      checkSelected.Click += delegate { BeginCheck(false); };
       checkAll.Click += delegate { BeginCheck(true); };
       pullOne.Click += delegate { BeginPull(); };
       refresh.Click += delegate { RefreshList(); };
@@ -158,8 +158,11 @@ namespace FortisMirror {
     }
 
     private void SetButtons() {
-      checkOne.Enabled = !running && list.SelectedItems.Count == 1 &&
-        ((RepoRow)list.SelectedItems[0].Tag).IsGit;
+      bool hasSelectedGit = false;
+      foreach (ListViewItem item in list.SelectedItems) {
+        if (((RepoRow)item.Tag).IsGit) { hasSelectedGit = true; break; }
+      }
+      checkSelected.Enabled = !running && hasSelectedGit;
       checkAll.Enabled = !running && repositories.Exists(delegate(RepoRow r) { return r.IsGit; });
       pullOne.Enabled = !running && list.SelectedItems.Count == 1 &&
         ((RepoRow)list.SelectedItems[0].Tag).Last != null &&
@@ -184,8 +187,16 @@ namespace FortisMirror {
             (v.AheadCount > 0 ? "  |  Локальных коммитов сверх общего предка: " + v.AheadCount : "") +
             (v.CanPull ? "   |   Pull доступен с подтверждением" : "   |   Pull заблокирован");
         }
+      } else if (list.SelectedItems.Count > 1) {
+        int gitCount = 0;
+        foreach (ListViewItem item in list.SelectedItems)
+          if (((RepoRow)item.Tag).IsGit) gitCount++;
+        detail.Text = "Выбрано папок: " + list.SelectedItems.Count +
+          " | Git-клонов для проверки: " + gitCount + Environment.NewLine +
+          "Нажмите «Проверить выбранные». Для выбора нескольких используйте Ctrl или Shift." +
+          Environment.NewLine + "Pull доступен только при выборе одного проверенного репозитория.";
       } else {
-        detail.Text = "Выберите репозиторий и нажмите «Проверить выбранный», либо нажмите «Проверить все».";
+        detail.Text = "Выберите клоны (Ctrl/Shift) и нажмите «Проверить выбранные», либо «Проверить все».";
       }
       SetButtons();
     }
@@ -236,9 +247,13 @@ namespace FortisMirror {
       var targets = new List<RepoRow>();
       if (all) {
         foreach (RepoRow row in repositories) if (row.IsGit) targets.Add(row);
-      } else if (list.SelectedItems.Count == 1) {
-        RepoRow row = (RepoRow)list.SelectedItems[0].Tag;
-        if (row.IsGit) targets.Add(row);
+      } else {
+        // Snapshot only the selected Git rows. Non-Git directories are skipped.
+        // The check can run for one or many clones; Pull still requires exactly one.
+        foreach (ListViewItem item in list.SelectedItems) {
+          RepoRow row = (RepoRow)item.Tag;
+          if (row.IsGit) targets.Add(row);
+        }
       }
       if (targets.Count == 0) return;
       running = true;

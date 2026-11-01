@@ -52,6 +52,23 @@ class MirrorInspectorSourceChecks(unittest.TestCase):
         self.assertIn('if (local.Timeout || branch.Timeout)', ui)
         self.assertIn('raw credential/URL errors', ui)
 
+    def test_multiple_selection_checks_subset_only_and_never_bulk_pulls(self):
+        ui = (ROOT / 'Mirror-Status.UI.cs').read_text(encoding='utf-8-sig')
+        self.assertIn('list.MultiSelect = true;', ui)
+        self.assertIn('MakeButton("Проверить выбранные", 195)', ui)
+        self.assertIn('checkSelected.Click += delegate { BeginCheck(false); };', ui)
+        self.assertIn('checkSelected.Enabled = !running && hasSelectedGit;', ui)
+        self.assertIn('foreach (ListViewItem item in list.SelectedItems)', ui)
+        self.assertIn('if (row.IsGit) targets.Add(row);', ui)
+        self.assertIn('if (all)', ui)
+        self.assertIn('checkAll.Click += delegate { BeginCheck(true); };', ui)
+        self.assertIn('pullOne.Enabled = !running && list.SelectedItems.Count == 1', ui)
+        self.assertIn('if (running || list.SelectedItems.Count != 1) return;', ui)
+        self.assertIn('if (!row.IsGit || expected == null || !expected.CanPull) return;', ui)
+        self.assertIn('Для выбора нескольких используйте Ctrl или Shift.', ui)
+        self.assertNotIn('checkOne.', ui)
+        self.assertNotIn('list.MultiSelect = false;', ui)
+
     def test_pull_is_single_repo_explicit_confirmed_and_fast_forward_only(self):
         ui = (ROOT / 'Mirror-Status.UI.cs').read_text(encoding='utf-8-sig')
         self.assertIn('pullOne.Click += delegate { BeginPull(); }', ui)
