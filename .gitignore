@@ -1,0 +1,37 @@
+# Local runtime state and credentials
+.env
+.env.*
+!.env.example
+*.log
+*.log.*
+*.tmp
+*.bak
+*.sqlite
+*.sqlite3
+*.db
+*.pfx
+*.pem
+*.key
+*.lnk
+*.user
+*.suo
+catalog.xml
+catalog-*.xml
+credentials
+*.credential
+*.secret
+
+# Build, test and editor state
+__pycache__/
+.pytest_cache/
+.vscode/
+.idea/
+*.pyc
+bin/
+obj/
+TestResults/
+
+# Machine-specific output and staging
+.staging/
+.local/
+output/

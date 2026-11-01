@@ -1,0 +1,7 @@
+# Fortis / RDG — подключения. Вставь этот текст в «Импорт из текста».
+# @app — папка текущей версии Control Center. Импорт ничего не запускает.
+Fortis Repo 2 | @app\Repo2-Worker.ps1 | hidden
+Fortis Repo 1 | @app\Repo1-Worker.ps1 | hidden
+RDG Updater | @app\Updater-Worker.ps1 | hidden
+CI Watcher — запуск | @app\Watcher-Start.ps1 | hidden
+CI Watcher — остановка | @app\Watcher-Stop.ps1 | hidden
