@@ -57,6 +57,14 @@ if ($LASTEXITCODE -ne 0) { throw 'Git pull не завершился успеш�
 
 Повторно создавать ярлык и импортировать штатный набор после обычного `pull` **не нужно**. Новые файлы используются при следующем запуске каталога или отдельного worker-процесса, уже работающие процессы не заменяются. `tools/Update-Windows-ControlCenter.ps1 -Apply` предназначен для отдельной предварительной проверки/восстановления ярлыка и **не требуется при каждом обновлении**. Не удалять другие репозитории из `Repos`; не путать Windows-клон с `/workspace/repo/Repos`.
 
+## Windows Git mirror inspector (read-only)
+
+The already-registerable `Fortis-Windows-Mirror-Status.ps1` now opens its own Windows Forms window when launched from the standalone Script Catalog. It immediately lists folders and Git clones under `%USERPROFILE%\Repos` (or an explicit `-MirrorRoot`), and provides **Проверить выбранный**, **Проверить все**, **Обновить список**, and **Отмена проверки**. Network checks run on a background worker with bounded waits, so the window remains usable. A non-Git directory is listed as such and is never queried.
+
+Keep **all three files together** after a normal Windows `git pull --ff-only origin main`: `Fortis-Windows-Mirror-Status.ps1` (existing registration/GUI entry point), `Mirror-Status.UI.cs` (GUI source), and `Mirror-Status.Report.ps1` (original text report). The catalog entry already pointing to the first file does **not** need to be recreated. Run with no arguments to open the GUI; use `-Cli` for the previous console report (`-Cli -Notify` for its optional notification).
+
+It calls **read-only** Git commands (`rev-parse`, `symbolic-ref`, `status`, `remote get-url`, `ls-remote`) and never runs `fetch`, `pull`, `checkout`, `push`, workers, Docker, or scheduled tasks. For network access it checks only a recognized `AlexPastukhh` GitHub origin and uses non-interactive Git settings. **АКТУАЛЕН** means the local `refs/heads/main` SHA matches GitHub; a different current branch or local edits are flagged in separate columns and in the review summary. **РАЗЛИЧАЮТСЯ** does not imply the next pull is safe. Windows PowerShell 5.1 + WinForms + git.exe are required. Windows runtime compilation/UI has **not** been verified inside Docker; the owner must test the first GUI launch on Windows.
+
 ## Requirements and verification
 
 The UI requires **Windows PowerShell 5.1, Windows Forms and an STA thread**. It is not a Linux-native application. The existing Docker workspace can edit the source and run the static Python regression tests, but it cannot verify real WinForms compilation or GUI behavior.
