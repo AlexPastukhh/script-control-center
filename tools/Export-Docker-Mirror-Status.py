@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Export a dated Docker Git worktree snapshot for manual import in the Windows mirror GUI.
+"""Read-only Docker Git status export for Windows mirror checks.
 
-Run inside the Fortis Repo container. No Git fetch, push, checkout, commit, or
-worktree changes. File is written outside Git repos under Workfiles.
+By default the report is saved outside Git repos under Workfiles.
+--stdout outputs TSV to stdout and does not write anything to the filesystem.
+--repo selects specific repository directory names to avoid scanning others.
 """
 import argparse
 import os
@@ -32,9 +33,15 @@ def git(repo, *args):
         return None
 
 
-def collect(root):
+def collect(root, names=None):
     results = []
-    for repo in sorted(root.iterdir(), key=lambda p: p.name.lower()):
+    if names:
+        if any(not VALID_NAME.fullmatch(name) or name in (".", "..") for name in names):
+            raise ValueError("Invalid repository name")
+        candidates = [root / name for name in dict.fromkeys(names)]
+    else:
+        candidates = sorted(root.iterdir(), key=lambda p: p.name.lower())
+    for repo in candidates:
         if not repo.is_dir() or repo.is_symlink() or not VALID_NAME.fullmatch(repo.name):
             continue
         if not ((repo / ".git").is_dir() or (repo / ".git").is_file()):
@@ -51,13 +58,17 @@ def collect(root):
     return results
 
 
+def as_tsv(data, timestamp):
+    stamp = timestamp.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return "FORTIS_DOCKER_STATUS_V1\t" + stamp + "\n" + "".join(
+        f"{name}\t{head}\t{count}\n" for name, head, count in data
+    )
+
+
 def export(root, output, timestamp):
     data = collect(root)
     output.parent.mkdir(parents=True, exist_ok=True)
-    stamp = timestamp.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    content = "FORTIS_DOCKER_STATUS_V1\t" + stamp + "\n"
-    content += "".join(f"{name}\t{head}\t{count}\n" for name, head, count in data)
-    output.write_text(content, encoding="utf-8")
+    output.write_text(as_tsv(data, timestamp), encoding="utf-8")
     return data
 
 
@@ -65,9 +76,20 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, default=DEFAULT_ROOT)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
+    parser.add_argument("--stdout", action="store_true", help="Write TSV to stdout only")
+    parser.add_argument("--repo", nargs="+", metavar="NAME",
+                        help="Include only these Docker repository folders")
     options = parser.parse_args()
     if not options.root.is_dir():
         parser.error("Docker repository root is missing")
+    if options.repo and any(not VALID_NAME.fullmatch(n) or n in (".", "..")
+                            for n in options.repo):
+        parser.error("Invalid repository name")
+    if options.stdout:
+        # stdout is only machine-readable TSV; diagnostics go to stderr.
+        rows = collect(options.root, options.repo)
+        sys.stdout.write(as_tsv(rows, datetime.now(timezone.utc)))
+        return
     rows = export(options.root, options.output, datetime.now(timezone.utc))
     print("Saved:", options.output)
     for name, head, changed in rows:

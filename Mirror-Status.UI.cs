@@ -20,8 +20,11 @@ namespace FortisMirror {
     internal CheckResult Last;
   }
   internal sealed class DockerState {
-    internal string Head;
-    internal int Changed;
+    internal string Head = "";
+    internal int Changed = -1;
+    internal DateTime CapturedUtc = DateTime.MinValue;
+    internal bool Live;
+    internal string Problem = "";
   }
   internal sealed class GitResult {
     internal bool Ok;
@@ -66,10 +69,9 @@ namespace FortisMirror {
     private readonly Button checkAll = MakeButton("Проверить все", 135);
     private readonly Button pullOne = MakeButton("Pull выбранного", 160);
     private readonly Button copyPaths = MakeButton("Копировать пути", 160);
-    private readonly Button loadDocker = MakeButton("Снимок Docker", 155);
+    private readonly Button loadDocker = MakeButton("Импорт TSV (резерв)", 180);
     private readonly Button commitAll = MakeButton("Коммит всего (Windows)", 205);
     private readonly Dictionary<string, DockerState> dockerStates = new Dictionary<string, DockerState>(StringComparer.OrdinalIgnoreCase);
-    private DateTime dockerSnapshotUtc = DateTime.MinValue;
     private readonly string dockerCachePath;
     private readonly Button refresh = MakeButton("Обновить список", 150);
     private readonly Button cancel = MakeButton("Отмена проверки", 155);
@@ -84,7 +86,7 @@ namespace FortisMirror {
       gitExe = gitPath;
       dockerCachePath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "FortisGitMirror", "docker-status.tsv");
-      Text = "Fortis — Windows Git-зеркало";
+      Text = "Fortis — Git Windows / Docker";
       Size = new Size(1310, 745);
       MinimumSize = new Size(950, 520);
       StartPosition = FormStartPosition.CenterScreen;
@@ -100,7 +102,7 @@ namespace FortisMirror {
 
       var header = new Panel { Dock = DockStyle.Fill };
       var title = new Label {
-        Text = "Windows-клоны  /  GitHub main", Dock = DockStyle.Top, Height = 35,
+        Text = "Windows / GitHub main / Docker", Dock = DockStyle.Top, Height = 35,
         Font = new Font("Segoe UI Semibold", 16f, FontStyle.Bold), ForeColor = Color.White
       };
       var pathLabel = new Label {
@@ -112,7 +114,7 @@ namespace FortisMirror {
         FlowDirection = FlowDirection.LeftToRight, AutoScroll = true
       };
       foreach (Button b in new Button[] { checkSelected, checkAll, pullOne, copyPaths,
-        loadDocker, commitAll, refresh, cancel }) actions.Controls.Add(b);
+        commitAll, refresh, cancel, loadDocker }) actions.Controls.Add(b);
       cancel.Enabled = false;
       // Dock order: controls added bottom-to-top.
       header.Controls.Add(actions);
@@ -137,7 +139,7 @@ namespace FortisMirror {
       list.Columns.Add("Windows: изменения", 140);
       list.Columns.Add("Отстаёт на", 98);
       list.Columns.Add("Последний локальный коммит", 310);
-      list.Columns.Add("Docker: изменения", 140);
+      list.Columns.Add("Docker: изменения", 175);
       layout.Controls.Add(list, 0, 1);
 
       var footer = new Panel { Dock = DockStyle.Fill };
@@ -175,14 +177,114 @@ namespace FortisMirror {
     }
 
 
+
+    // A normal owner-requested Check reads Docker via the LOCAL Docker Desktop CLI.
+    // One read-only docker exec call checks only the selected repo names.
+    // No Docker restart, Git fetch/push/commit or Windows source writes.
+    private Dictionary<string, DockerState> CheckDockerSelected(List<RepoRow> targets,
+      CancellationToken token) {
+      var states = new Dictionary<string, DockerState>(StringComparer.OrdinalIgnoreCase);
+      foreach (RepoRow row in targets) {
+        states[row.Item.Text] = new DockerState { Problem = "Docker недоступен" };
+      }
+      if (token.IsCancellationRequested) return states;
+      var args = new StringBuilder(
+        "exec --user 1000:1000 fortis-repo-test python3 -B " +
+        "/workspace/repo/Repos/script-control-center/tools/Export-Docker-Mirror-Status.py " +
+        "--stdout --repo");
+      foreach (RepoRow row in targets) {
+        if (!Regex.IsMatch(row.Item.Text, @"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,119}$"))
+          continue;
+        // Strict name validation: no shell, spaces or argument injection.
+        args.Append(" ").Append(row.Item.Text);
+      }
+      Ui(delegate {
+        progress.Text = "Docker: проверка выбранных репозиториев (" + targets.Count + ")...";
+      });
+      try {
+        using (var proc = new Process()) {
+          var psi = proc.StartInfo;
+          psi.FileName = "docker.exe";
+          psi.Arguments = args.ToString();
+          psi.UseShellExecute = false;
+          psi.CreateNoWindow = true;
+          psi.RedirectStandardOutput = true;
+          psi.RedirectStandardError = true;
+          psi.EnvironmentVariables["PYTHONDONTWRITEBYTECODE"] = "1";
+          var output = new StringBuilder();
+          object gate = new object();
+          proc.OutputDataReceived += delegate(object sender, DataReceivedEventArgs e) {
+            if (e.Data != null) lock (gate) {
+              if (output.Length < 1048576) output.AppendLine(e.Data);
+            }
+          };
+          // Never show Docker CLI stderr: it can contain machine-specific details.
+          proc.ErrorDataReceived += delegate(object sender, DataReceivedEventArgs e) { };
+          proc.Start();
+          proc.BeginOutputReadLine();
+          proc.BeginErrorReadLine();
+          var sw = Stopwatch.StartNew();
+          bool stopped = false;
+          while (!proc.WaitForExit(150)) {
+            if (token.IsCancellationRequested || sw.ElapsedMilliseconds >= 90000) {
+              stopped = true;
+              foreach (RepoRow row in targets)
+                states[row.Item.Text].Problem = token.IsCancellationRequested ?
+                  "Отменено" : "Таймаут Docker";
+              try { proc.Kill(); } catch (InvalidOperationException) { }
+              catch (System.ComponentModel.Win32Exception) { }
+              proc.WaitForExit(2000);
+              break;
+            }
+          }
+          if (stopped) return states;
+          proc.WaitForExit();
+          if (proc.ExitCode != 0) {
+            foreach (RepoRow row in targets)
+              states[row.Item.Text].Problem = "Ошибка Docker exec";
+            return states;
+          }
+          string tsv;
+          lock (gate) tsv = output.ToString();
+          DateTime stamp;
+          Dictionary<string, DockerState> found;
+          if (!ParseDockerTsv(tsv, out stamp, out found) || stamp == DateTime.MinValue) {
+            foreach (RepoRow row in targets)
+              states[row.Item.Text].Problem = "Некорректный ответ Docker";
+            return states;
+          }
+          foreach (RepoRow row in targets) {
+            DockerState state;
+            if (found.TryGetValue(row.Item.Text, out state)) {
+              state.Live = true;
+              state.Problem = "";
+              states[row.Item.Text] = state;
+            } else states[row.Item.Text].Problem = "Нет репо в Docker";
+          }
+        }
+      } catch (System.ComponentModel.Win32Exception) {
+        foreach (RepoRow row in targets)
+          states[row.Item.Text].Problem = "Нет docker.exe";
+      } catch (InvalidOperationException) {
+        foreach (RepoRow row in targets)
+          states[row.Item.Text].Problem = "Ошибка запуска Docker";
+      } catch (IOException) {
+        foreach (RepoRow row in targets)
+          states[row.Item.Text].Problem = "Ошибка чтения Docker";
+      }
+      return states;
+    }
+
     private string DockerLabel(string name) {
       DockerState state;
-      if (!dockerStates.TryGetValue(name, out state)) return "Нет данных";
-      string label = state.Changed < 0 ? "Ошибка снимка" :
+      if (!dockerStates.TryGetValue(name, out state)) return "Не проверен";
+      if (state.Problem.Length > 0) return state.Problem;
+      string label = state.Changed < 0 ? "Статус неизвестен" :
         state.Changed == 0 ? "Нет" : "Есть: " + state.Changed;
-      if (dockerSnapshotUtc == DateTime.MinValue ||
-          DateTime.UtcNow - dockerSnapshotUtc > TimeSpan.FromHours(24))
+      if (state.CapturedUtc == DateTime.MinValue ||
+          DateTime.UtcNow - state.CapturedUtc > TimeSpan.FromHours(24))
         label += " (старый)";
+      else if (!state.Live) label += " (TSV)";
       foreach (RepoRow row in repositories) {
         if (!String.Equals(row.Item.Text, name, StringComparison.OrdinalIgnoreCase)) continue;
         if (row.Last != null && Regex.IsMatch(row.Last.RemoteFull, @"^[0-9a-f]{40}$") &&
@@ -196,17 +298,20 @@ namespace FortisMirror {
     private string DockerDescription(RepoRow row) {
       DockerState state;
       if (!dockerStates.TryGetValue(row.Item.Text, out state))
-        return "Docker: нет данных. Загрузите снимок из Docker; живого подключения нет.";
-      string stamp = dockerSnapshotUtc.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture) + " UTC";
+        return "Docker: не проверен. Кнопка «Проверить выбранные» проверит Windows и Docker.";
+      if (state.Problem.Length > 0)
+        return "Docker: " + state.Problem + ". Проверка Windows работает независимо.";
+      string stamp = state.CapturedUtc.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture) + " UTC";
       string comparison = "";
       if (row.Last != null && Regex.IsMatch(row.Last.RemoteFull, @"^[0-9a-f]{40}$")) {
         comparison = String.Equals(state.Head, row.Last.RemoteFull, StringComparison.OrdinalIgnoreCase) ?
           " | Docker HEAD = GitHub main" :
           " | Docker HEAD отличается от GitHub main (направление неизвестно)";
       }
-      return "Docker: " + DockerLabel(row.Item.Text) + " | снимок " + stamp +
+      return "Docker: " + DockerLabel(row.Item.Text) + " | проверено " + stamp +
+        (state.Live ? " | Docker exec (проверка по запросу)" : " | импортированный TSV") +
         " | HEAD: " + state.Head + comparison + Environment.NewLine +
-        "Статус Docker — не живой. После новой работы создайте и загрузите новый снимок.";
+        "Состояние Docker зафиксировано на время проверки, не отслеживается непрерывно.";
     }
 
     private bool ParseDockerSnapshot(string path, out DateTime stamp,
@@ -216,7 +321,19 @@ namespace FortisMirror {
       try {
         var info = new FileInfo(path);
         if (!info.Exists || info.Length > 1048576) return false;
-        string[] lines = File.ReadAllLines(path, Encoding.UTF8);
+        return ParseDockerTsv(File.ReadAllText(path, Encoding.UTF8), out stamp, out states) &&
+          states.Count > 0;
+      } catch (IOException) { return false; }
+      catch (UnauthorizedAccessException) { return false; }
+    }
+
+    private bool ParseDockerTsv(string tsv, out DateTime stamp,
+      out Dictionary<string, DockerState> states) {
+      states = new Dictionary<string, DockerState>(StringComparer.OrdinalIgnoreCase);
+      stamp = DateTime.MinValue;
+      try {
+        if (tsv.Length > 1048576) return false;
+        string[] lines = tsv.Replace("\r\n", "\n").Split('\n');
         if (lines.Length < 2 || lines.Length > 2000) return false;
         string[] head = lines[0].TrimStart('\uFEFF').Split('\t');
         if (head.Length != 2 || head[0] != "FORTIS_DOCKER_STATUS_V1" ||
@@ -234,9 +351,11 @@ namespace FortisMirror {
             !Regex.IsMatch(parts[1], @"^[0-9a-f]{40}$") ||
             !Int32.TryParse(parts[2], out count) || count < -1 ||
             states.ContainsKey(parts[0])) return false;
-          states.Add(parts[0], new DockerState { Head = parts[1], Changed = count });
+          states.Add(parts[0], new DockerState {
+            Head = parts[1], Changed = count, CapturedUtc = stamp, Live = false
+          });
         }
-        return states.Count > 0;
+        return true;
       } catch (IOException) { return false; }
       catch (UnauthorizedAccessException) { return false; }
     }
@@ -245,7 +364,6 @@ namespace FortisMirror {
       DateTime stamp;
       Dictionary<string, DockerState> states;
       if (ParseDockerSnapshot(dockerCachePath, out stamp, out states)) {
-        dockerSnapshotUtc = stamp;
         dockerStates.Clear();
         foreach (var entry in states) dockerStates.Add(entry.Key, entry.Value);
       }
@@ -274,7 +392,6 @@ namespace FortisMirror {
           MessageBox.Show(this, "Снимок загружен только на текущий сеанс: не удалось сохранить кеш.",
             "Снимок Docker", MessageBoxButtons.OK, MessageBoxIcon.Warning);
         }
-        dockerSnapshotUtc = stamp;
         dockerStates.Clear();
         foreach (var entry in states) dockerStates.Add(entry.Key, entry.Value);
         foreach (RepoRow row in repositories)
@@ -533,7 +650,8 @@ namespace FortisMirror {
         int count = repositories.FindAll(delegate(RepoRow r) { return r.IsGit; }).Count;
         progress.Text = "Найдено Git-клонов: " + count + "  |  Всего папок: " + repositories.Count +
           "  |  Сетевая проверка не запускалась.";
-        detail.Text = "Windows проверяется по Git. Docker показывается только по вручную загруженному датированному снимку.";
+        detail.Text = "«Проверить выбранные/все» проверяет Git в Windows и в fortis-repo-test (Docker Desktop)." +
+          Environment.NewLine + "«Импорт TSV» — запасной способ без Docker Desktop.";
       } catch (Exception ex) {
         progress.Text = "Ошибка чтения зеркальной папки.";
         detail.Text = ex.Message;
@@ -565,21 +683,31 @@ namespace FortisMirror {
       foreach (RepoRow row in targets) {
         row.Last = null;
         row.Item.SubItems[1].Text = "В ОЧЕРЕДИ";
+        row.Item.SubItems[8].Text = "В ОЧЕРЕДИ";
         row.Item.ForeColor = Color.FromArgb(230, 239, 248);
       }
       ThreadPool.QueueUserWorkItem(delegate {
+        Dictionary<string, DockerState> checkedDocker = CheckDockerSelected(targets, token);
+        if (token.IsCancellationRequested) {
+          Ui(delegate { progress.Text = "Проверка Docker отменена."; });
+        }
         int done = 0;
         foreach (RepoRow row in targets) {
           if (token.IsCancellationRequested) break;
           Ui(delegate {
             row.Item.SubItems[1].Text = "ПРОВЕРЯЕТСЯ...";
-            progress.Text = "Проверяется " + row.Item.Text + "  (" + (done + 1) + "/" + targets.Count + ")";
+            row.Item.SubItems[8].Text = "ПРОВЕРЯЕТСЯ...";
+            progress.Text = "Windows: " + row.Item.Text + "  (" + (done + 1) + "/" + targets.Count +
+              "), Docker уже запрошен";
           });
           CheckResult result = CheckRepository(row.Path, token);
           if (token.IsCancellationRequested) break;
           done++;
           int finished = done;
           Ui(delegate {
+            DockerState remoteDocker = null;
+            if (checkedDocker.TryGetValue(row.Item.Text, out remoteDocker))
+              dockerStates[row.Item.Text] = remoteDocker;
             row.Last = result;
             row.Item.SubItems[1].Text = result.State;
             row.Item.SubItems[2].Text = result.Local;
@@ -589,7 +717,11 @@ namespace FortisMirror {
             row.Item.SubItems[6].Text = result.Behind;
             row.Item.SubItems[7].Text = result.Commit;
             row.Item.SubItems[8].Text = DockerLabel(row.Item.Text);
-            row.Item.ForeColor = result.State == "АКТУАЛЕН" && result.Branch == "main" && result.Changes == "Нет" ?
+            bool dockerOk = remoteDocker != null && remoteDocker.Live &&
+              remoteDocker.Problem.Length == 0 && remoteDocker.Changed == 0 &&
+              remoteDocker.Head == result.RemoteFull;
+            row.Item.ForeColor = result.State == "АКТУАЛЕН" && result.Branch == "main" &&
+              result.Changes == "Нет" && dockerOk ?
               Color.FromArgb(116, 215, 169) : Color.FromArgb(255, 195, 117);
             progress.Text = "Проверено: " + finished + " / " + targets.Count;
             ShowSelection();
@@ -599,18 +731,26 @@ namespace FortisMirror {
         Ui(delegate {
           foreach (RepoRow row in targets)
             if (row.Item.SubItems[1].Text == "В ОЧЕРЕДИ" ||
-                row.Item.SubItems[1].Text == "ПРОВЕРЯЕТСЯ...") row.Item.SubItems[1].Text = "НЕ ПРОВЕРЕН";
+                row.Item.SubItems[1].Text == "ПРОВЕРЯЕТСЯ...") {
+              row.Item.SubItems[1].Text = "НЕ ПРОВЕРЕН";
+              row.Item.SubItems[8].Text = "НЕ ПРОВЕРЕН";
+            }
           running = false;
           int currentCount = 0, reviewCount = 0;
           foreach (RepoRow r in repositories) {
             if (!r.IsGit) continue;
+            DockerState ds;
+            bool dockerClean = dockerStates.TryGetValue(r.Item.Text, out ds) &&
+              ds.Live && ds.Problem.Length == 0 && ds.Changed == 0 &&
+              r.Last != null && ds.Head == r.Last.RemoteFull;
             if (r.Item.SubItems[1].Text == "АКТУАЛЕН" && r.Item.SubItems[4].Text == "main" &&
-                r.Item.SubItems[5].Text == "Нет") currentCount++;
+                r.Item.SubItems[5].Text == "Нет" && dockerClean) currentCount++;
             else if (r.Item.SubItems[1].Text != "НЕ ПРОВЕРЕН") reviewCount++;
           }
           progress.Text = (cancelled ? "Отменено; " : "Готово; ") +
             "проверено за запуск: " + done + "/" + targets.Count +
-            "; полностью актуальны: " + currentCount + "; требуют внимания: " + reviewCount + ".";
+            "; Windows+Docker совпадают с GitHub: " + currentCount +
+            "; остальные требуют внимания или проверки: " + reviewCount + ".";
           SetButtons();
         });
       });

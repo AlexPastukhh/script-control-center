@@ -138,19 +138,37 @@ class MirrorInspectorSourceChecks(unittest.TestCase):
         self.assertIn('private bool writing;', ui)
         self.assertIn('if (writing)', ui)
 
-    def test_docker_snapshot_is_explicit_dated_and_not_live(self):
+    def test_normal_check_inspects_windows_and_docker_together(self):
         ui = (ROOT / 'Mirror-Status.UI.cs').read_text(encoding='utf-8-sig')
-        for text in ('Снимок Docker', 'Windows: изменения', 'Docker: изменения',
-                     'Нет данных', 'старый', 'dockerSnapshotUtc',
-                     'ParseDockerSnapshot', 'TryLoadDockerCache',
-                     'FORTIS_DOCKER_STATUS_V1', 'ImportDockerSnapshot',
-                     'DateTime.UtcNow', 'FortisGitMirror'):
+        for text in ('Windows: изменения', 'Docker: изменения',
+                     'CheckDockerSelected(targets, token)', 'CheckRepository(row.Path, token)',
+                     'psi.FileName = "docker.exe"', 'exec --user 1000:1000 fortis-repo-test',
+                     '--stdout --repo', 'tools/Export-Docker-Mirror-Status.py',
+                     'checkedDocker.TryGetValue(row.Item.Text', 'DockerLabel(row.Item.Text)',
+                     'bool dockerOk = remoteDocker != null && remoteDocker.Live',
+                     'Нет репо в Docker', 'Нет docker.exe', 'Ошибка Docker exec',
+                     'Таймаут Docker', 'status', 'DateTime.UtcNow', 'CapturedUtc',
+                     'ParseDockerTsv', 'PYTHONDONTWRITEBYTECODE'):
             self.assertIn(text, ui)
         self.assertNotIn('http://localhost:', ui)
+        self.assertNotIn('docker.exe run ', ui)
+        self.assertNotIn('docker.exe stop ', ui)
+        self.assertNotIn('docker.exe restart ', ui)
+
+    def test_manual_tsv_remains_fallback_with_stale_marker(self):
+        ui = (ROOT / 'Mirror-Status.UI.cs').read_text(encoding='utf-8-sig')
+        for text in ('Импорт TSV (резерв)', '(TSV)', '(старый)',
+                     'ParseDockerSnapshot', 'TryLoadDockerCache',
+                     'FORTIS_DOCKER_STATUS_V1', 'ImportDockerSnapshot',
+                     'FortisGitMirror'):
+            self.assertIn(text, ui)
         exporter = (ROOT / 'tools/Export-Docker-Mirror-Status.py').read_text()
         self.assertIn('status", "--porcelain=v1", "--untracked-files=all', exporter)
         self.assertIn('GIT_OPTIONAL_LOCKS', exporter)
         self.assertIn('Workfiles/windows-docker-audit', exporter)
+        self.assertIn('def collect(root, names=None):', exporter)
+        self.assertIn('parser.add_argument("--stdout"', exporter)
+        self.assertIn('parser.add_argument("--repo"', exporter)
 
     def test_copy_paths_and_single_repo_full_commit_guards(self):
         ui = (ROOT / 'Mirror-Status.UI.cs').read_text(encoding='utf-8-sig')
@@ -195,6 +213,25 @@ class MirrorInspectorSourceChecks(unittest.TestCase):
             lines = output.read_text().splitlines()
             self.assertEqual(lines[0].split('\t')[0], 'FORTIS_DOCKER_STATUS_V1')
             self.assertEqual(len(lines[1].split('\t')[1]), 40)
+            self.assertEqual(instance.collect(root, ['sample'])[0][2], 1)
+            self.assertEqual(instance.collect(root, ['missing']), [])
+            self.assertRaises(ValueError, instance.collect, root, ['../outside'])
+            no_output = Path(folder) / 'would-not-write.tsv'
+            probe = subprocess.run(
+                ['python3', '-B', str(module), '--root', str(root),
+                 '--output', str(no_output), '--stdout', '--repo', 'sample'],
+                text=True, capture_output=True, check=True,
+            )
+            self.assertFalse(no_output.exists())
+            self.assertEqual(probe.stderr, '')
+            self.assertIn('sample\t', probe.stdout)
+            self.assertTrue(probe.stdout.startswith('FORTIS_DOCKER_STATUS_V1\t'))
+            missing = subprocess.run(
+                ['python3', '-B', str(module), '--root', str(root),
+                 '--stdout', '--repo', 'missing'],
+                text=True, capture_output=True, check=True,
+            )
+            self.assertEqual(len(missing.stdout.splitlines()), 1)
 
 
     def test_safe_windows_mirror_reconciliation_is_owner_explicit(self):

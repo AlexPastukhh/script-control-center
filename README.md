@@ -67,29 +67,48 @@ Keep **all three files together** after a normal Windows `git pull --ff-only ori
 
 ## Windows и Docker: раздельный статус и операции
 
-В списке находятся **Windows: изменения** (живой `git status` в Windows-клоне) и
-**Docker: изменения** (только из датированного вручную импортированного снимка).
-`Docker: Нет` означает отсутствие незакоммиченных файлов **на момент снимка**, а
-не непрерывный мониторинг. При отсутствии снимка отображается `Нет данных`,
-после 24 часов добавляется `(старый)`. При проверенном GitHub SHA и отличающемся
-Docker `HEAD` появляется `SHA≠GH` (это не доказывает направление расхождения);
-полные SHA и время снимка показываются при выборе строки.
+**Обычная проверка одной или нескольких папок одновременно проверяет Windows и Docker.**
+«Проверить выбранные» проверяет только выделенные Git-клоны, «Проверить все» —
+все обнаруженные Windows Git-клоны. Для каждого имени проверяется:
 
-Для создания снимка **в Docker**:
+- **Windows:** локальные незакоммиченные файлы и сравнение локального `main` с
+  GitHub `main` (необязательный `git fetch` только для получения истории).
+- **Docker:** незакоммиченные файлы и HEAD в
+  `/workspace/repo/Repos/<имя Windows-папки>`; HEAD сопоставляется с проверенным
+  GitHub SHA. `SHA≠GH` означает отличие коммитов, но не определяет ahead/behind.
 
-```bash
-cd /workspace/repo/Repos/script-control-center
-python3 tools/Export-Docker-Mirror-Status.py
-# Записывает: /workspace/repo/Workfiles/windows-docker-audit/docker-status.tsv
+Проверка Docker выполняется **одним вызовом** локального `docker.exe exec`
+для выбранной группы, внутри фиксированного контейнера **`fortis-repo-test`**
+от пользователя `1000:1000`:
+
+```powershell
+docker exec --user 1000:1000 fortis-repo-test python3 -B /workspace/repo/Repos/script-control-center/tools/Export-Docker-Mirror-Status.py --stdout --repo simulation
 ```
 
-Снимок TSV содержит только имя каталога, Git HEAD SHA и число изменённых,
-добавленных или удалённых файлов (или -1 при ошибке). **Он не публикуется
-автоматически в GitHub и не синхронизируется с Windows.** Передайте TSV на
-Windows вручную и нажмите **Снимок Docker**, выбрав файл. Программа проверит
-формат и сохранит локальную копию в
-`%LOCALAPPDATA%\FortisGitMirror\docker-status.tsv` (вне Git-клонов).
-Никакого прямого подключения Windows к Docker в приложении нет.
+Экспорт использует только `git rev-parse` и `git status` с
+`GIT_OPTIONAL_LOCKS=0`. Он не изменяет файлов и не выполняет checkout, commit,
+push, git fetch, запуск программ, перезапуск или пересоздание контейнера.
+Проверка запускается только по кнопке, окно остаётся отзывчивым. Каждый
+результат помечается временем выполнения — это проверка **по запросу**, а не
+непрерывный мониторинг. Для отсутствующей Docker-папки отображается
+`Нет репо в Docker`, для недоступного Docker Desktop / контейнера —
+отдельная ошибка, а не ложное `Нет изменений`. Проверка Windows при этом
+продолжается. Кнопка «Отмена проверки» отменяет и попытку Docker exec.
+
+**Импорт TSV** оставлен запасным способом на случай отсутствия Docker Desktop.
+Он открывает диалог файла, а не выполняет проверку. Импортированный статус
+помечается `(TSV)`; старый (более 24 часов) — `(старый)`.
+
+Для ручного создания TSV внутри Docker (без вывода токенов и содержимого файлов):
+
+```bash
+python3 /workspace/repo/Repos/script-control-center/tools/Export-Docker-Mirror-Status.py
+# /workspace/repo/Workfiles/windows-docker-audit/docker-status.tsv
+```
+
+Передайте TSV на Windows через удобный канал и выберите в «Импорт TSV».
+Он содержит только имя, HEAD SHA и количество изменённых путей; кеш в
+`%LOCALAPPDATA%\FortisGitMirror\docker-status.tsv` находится **вне** Git-клонов.
 
 **Копировать пути** копирует Windows-путь и *предполагаемый* Docker-путь
 `/workspace/repo/Repos/<имя Windows-папки>`, помечая его как неподтверждённый.
