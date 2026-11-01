@@ -16,6 +16,39 @@ The intended workflow is **Docker Git checkout → commit/push → Windows clone
 
 See [Git-to-Windows operating procedure](docs/GIT-WINDOWS-SOURCE-OF-TRUTH.md) and `tools/Update-Windows-ControlCenter.ps1` (read-only preview by default). **After changing Docker**, update the corresponding resource/pin checks and verify both launchers before terminating the last working Fortis Repo connection. Repo 2 is not yet confirmed to reconnect using the cloned-source launcher.
 
+## Зеркальная директория репозиториев (Docker ↔ Windows)
+
+Это **логическое зеркало через GitHub**, а не одна общая папка и не Docker bind mount:
+
+| Роль | Путь |
+| --- | --- |
+| Исходники в Docker | `/workspace/repo/Repos/<repo>` (тот же volume-backed каталог, что `/workspace/repos/<repo>`) |
+| Удалённый источник обмена | `https://github.com/AlexPastukhh/<repo>.git` |
+| Windows-клон | `%USERPROFILE%\Repos\<repo>` |
+
+Для этого приложения соответствующая папка Windows — **`C:\Users\alexa\Repos\script-control-center`**. Используем **уже принятую Windows-папку `Repos`**, а не вторую копию `%USERPROFILE%\repos` в документации (Windows не различает эти имена по регистру), не `%LOCALAPPDATA%\FortisRDGControlCenter` и не Docker volume. Новые файлы в Docker не появляются автоматически на Windows: после коммита и `git push` владелец выполняет `git pull --ff-only` в нужном Windows-клоне. Незакоммиченные Docker-файлы не зеркалируются.
+
+Первое создание Windows-клона (в **обычном Windows PowerShell**, не через Docker MCP):
+
+```powershell
+$mirror = Join-Path $env:USERPROFILE 'Repos'
+$repo = Join-Path $mirror 'script-control-center'
+if (Test-Path -LiteralPath $repo) {
+    if (-not (Test-Path -LiteralPath (Join-Path $repo '.git'))) {
+        throw "Каталог существует, но это не Git-клон: $repo"
+    }
+    Write-Host "Git-клон уже существует: $repo"
+} else {
+    New-Item -ItemType Directory -Path $mirror -Force | Out-Null
+    git clone --branch main --single-branch 'https://github.com/AlexPastukhh/script-control-center.git' $repo
+    if ($LASTEXITCODE -ne 0) { throw 'Клонирование не удалось' }
+}
+git -C $repo remote -v
+git -C $repo rev-parse HEAD
+```
+
+Команда **только создаёт или проверяет клон**. Отдельная проверка и смена ярлыка — `tools/Update-Windows-ControlCenter.ps1` (`-Apply` только после просмотра его действий). Не удалять существующие другие репозитории из `Repos`; не путать Windows-клон с `/workspace/repo/Repos`.
+
 ## Requirements and verification
 
 The UI requires **Windows PowerShell 5.1, Windows Forms and an STA thread**. It is not a Linux-native application. The existing Docker workspace can edit the source and run the static Python regression tests, but it cannot verify real WinForms compilation or GUI behavior.

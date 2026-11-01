@@ -1,14 +1,18 @@
 # Git as Windows launcher source of truth (transition 2026-11-01)
 
+## Directory mapping
+
+The Windows **mirror** is the per-repository Git checkout under `%USERPROFILE%\Repos\<repo>`, matching the naming convention of Docker `/workspace/repo/Repos/<repo>` (or `/workspace/repos/<repo>`). **They are not the same physical directory.** Transfer happens only by GitHub commit/push/pull, not by a Docker Windows bind mount or automatic filesystem mirroring. For this app the canonical Windows checkout is `%USERPROFILE%\Repos\script-control-center`; do not create a competing `%LOCALAPPDATA%` source copy. Windows `Repos`/`repos` casing is equivalent. Git does not transfer uncommitted changes.
+
 ## Intended path and responsibility
 
 1. Author source inside the **existing** Fortis Repo Docker Git checkout (`/workspace/repos/script-control-center`).
 2. Inspect/test code, review the diff and any pinned resources, `git commit`, then `git push` (current owner policy permits `main`).
-3. On Windows, `git pull --ff-only origin main` into a **separate Windows Git clone** (default `%USERPROFILE%\repos\script-control-center`). Git is the transfer mechanism; there is no shared Windows bind mount.
+3. On Windows, `git pull --ff-only origin main` into a **separate Windows Git clone** (default `%USERPROFILE%\Repos\script-control-center`). Git is the transfer mechanism; there is no shared Windows bind mount.
 4. The single Desktop `Fortis RDG Control Center.lnk` should launch `Start-ControlCenter.ps1` **in that Windows clone**. The launcher, catalog, worker adapters and repo1/repo2 resource guards live in Git there. Source code and worker scripts are not copied to `%LOCALAPPDATA%` during an update.
 5. Installing/pulling source does not run arbitrary scripts or authorize an existing service restart. The owner explicitly chooses any worker Run; do not automatically stop or replace an active tunnel.
 
-Use `tools/Update-Windows-ControlCenter.ps1` **from the Windows clone** for source verification and shortcut switching. Default is read-only. The optional `-Apply` pulls `main` fast-forward-only, runs two compile-only Windows WinForms tests and both Repo 1/2 read-only Previews, then switches the Desktop shortcut after all checks pass. It does not start a tunnel, change Docker, update pins, or run a worker. WinForms compilation and live connection still require separate owner testing. For initial clone, use `git clone https://github.com/AlexPastukhh/script-control-center.git "$env:USERPROFILE\repos\script-control-center"` in Windows PowerShell.
+Use `tools/Update-Windows-ControlCenter.ps1` **from the Windows clone** for source verification and shortcut switching. Default is read-only. The optional `-Apply` pulls `main` fast-forward-only, runs two compile-only Windows WinForms tests and both Repo 1/2 read-only Previews, then switches the Desktop shortcut after all checks pass. It does not start a tunnel, change Docker, update pins, or run a worker. WinForms compilation and live connection still require separate owner testing. For initial clone, use `git clone https://github.com/AlexPastukhh/script-control-center.git "$env:USERPROFILE\Repos\script-control-center"` in Windows PowerShell.
 
 ## Location and scope
 

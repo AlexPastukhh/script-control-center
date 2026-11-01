@@ -8,7 +8,7 @@ No worker, Docker start/stop, Guard Run, profile or secret manipulation.
 [CmdletBinding()]
 param(
     [switch]$Apply,
-    [string]$RepoPath = (Join-Path $env:USERPROFILE 'repos\script-control-center')
+    [string]$RepoPath = (Join-Path $env:USERPROFILE 'Repos\script-control-center')
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
