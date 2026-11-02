@@ -40,7 +40,7 @@ class GitLauncherContract(unittest.TestCase):
         helper = content('Get-TunnelWindowsMirror.ps1')
         for marker in (b'Repos\\script-control-center', b"Join-Path $reposRoot 'tunnel'",
                        b'AlexPastukhh/tunnel', b'AlexPastukhh/script-control-center', b'scriptCenterDirty', b'branch --show-current',
-                       b'status --porcelain --untracked-files=normal', b'rev-list --left-right --count', b'8B035C231D08D326D8D12DF4D35EE7303E925AFB1C0F46596EEC5FD02B0C226C',
+                       b'status --porcelain --untracked-files=normal', b'rev-list --left-right --count', b'285A5F16059AF9061731D67BA0AF62211199E4DB961E5A4C3EE59693EA0DC221',
                        b'Get-FileHash'):
             self.assertIn(marker, helper)
         for worker in ('Repo1-Worker.ps1','Repo2-Worker.ps1','Updater-Worker.ps1',

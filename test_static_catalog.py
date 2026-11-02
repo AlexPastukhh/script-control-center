@@ -111,7 +111,7 @@ class RegistrationChecks(unittest.TestCase):
         for marker in ("Repos\\script-control-center","Join-Path $reposRoot 'tunnel'",
                        'remote get-url origin','AlexPastukhh/tunnel','AlexPastukhh/script-control-center','scriptCenterDirty','branch --show-current',
                        'status --porcelain --untracked-files=normal','rev-list --left-right --count',
-                       '8B035C231D08D326D8D12DF4D35EE7303E925AFB1C0F46596EEC5FD02B0C226C',
+                       '285A5F16059AF9061731D67BA0AF62211199E4DB961E5A4C3EE59693EA0DC221',
                        'Get-FileHash','Repo1-Worker.ps1','Repo2-Worker.ps1',
                        'FortisRepo2-quiet-logs.ps1'):
             self.assertIn(marker,source)
