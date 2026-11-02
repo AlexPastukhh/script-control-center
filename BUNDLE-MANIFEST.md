@@ -28,7 +28,7 @@ fetched `origin/main` in sync:
 - Worker/launcher bundle: `%USERPROFILE%\Repos\tunnel\runtime\windows-repo\current`
 
 The resolver verifies the pinned `source-manifest.json` fingerprint and all
-eight SHA-256 file hashes before it returns a source path. Missing, dirty,
+nine SHA-256 file hashes before it returns a source path. Missing, dirty,
 stale, wrong-branch or modified source fails closed. It never falls back to
 `script-control-center\launchers`, `%LOCALAPPDATA%` launcher copies, Docker
 paths or another arbitrary Windows directory.
@@ -39,6 +39,7 @@ paths or another arbitrary Windows directory.
 | Repo 2 | `Repo2-Worker.ps1`, `launchers\FortisRDGLauncherV2\Start-Fortis.ps1`, `Common.ps1`, `launchers\FortisRepoPlus2\Repo2DirectGuard.ps1`, `FortisRepo2-quiet-logs.ps1` |
 | RDG Updater | `Start-Fortis.ps1` and `Common.ps1` |
 | CI Watcher start/stop | `Common.ps1` and the adjacent Repo 2 Guard |
+| Shared Repo1/Repo2 Guard | `launchers\shared\FortisContainerPolicy.ps1` — common Windows/Docker/Linux isolation and guarded runtime-config policy |
 
 The old `script-control-center\launchers` files are retained for historical
 source/contract tests only. They are not used by Script Center worker execution.

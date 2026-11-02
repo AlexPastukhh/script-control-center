@@ -15,7 +15,7 @@ The Windows clones must be siblings under the existing `%USERPROFILE%\Repos` dir
 
 1. `Start-ScriptCatalog.ps1` is the primary Desktop shortcut target. The five catalog registrations retain their absolute paths into the stable `script-control-center` clone; do not reimport them after pulls.
 2. `Repo1-Worker.ps1` and `Repo2-Worker.ps1` in Script Center are **thin adapters**. They dot-source `Get-TunnelWindowsMirror.ps1` and delegate to `%USERPROFILE%\Repos\tunnel\runtime\windows-repo\current\Repo1-Worker.ps1` / `Repo2-Worker.ps1`.
-3. The resolver accepts only the canonical clean `main` Script Center clone and its exact sibling Windows `tunnel` Git clone with approved origins, clean `main`, the pinned `source-manifest.json` fingerprint, and all eight matching SHA-256 file hashes. Missing, dirty, stale, modified or wrong-branch source is a hard failure. There is no fallback to `script-control-center\launchers`, `%LOCALAPPDATA%`, Docker paths or other arbitrary Windows directories.
+3. The resolver accepts only the canonical clean `main` Script Center clone and its exact sibling Windows `tunnel` Git clone with approved origins, clean `main`, the pinned `source-manifest.json` fingerprint, and all nine matching SHA-256 file hashes, including the shared `launchers/shared/FortisContainerPolicy.ps1` module used by both Repo1 and Repo2. Missing, dirty, stale, modified or wrong-branch source is a hard failure. There is no fallback to `script-control-center\launchers`, `%LOCALAPPDATA%`, Docker paths or other arbitrary Windows directories.
 4. `Updater-Worker.ps1`, `Watcher-Start.ps1` and `Watcher-Stop.ps1` resolve shared `Start-Fortis.ps1` / `Common.ps1` from the same verified tunnel mirror. The RDG updater script itself remains an external Windows-local RDG dependency and is checked explicitly.
 5. The `script-control-center\launchers` tree is retained for historical source/contract tests only; Script Center worker execution no longer uses it.
 
@@ -31,7 +31,7 @@ On Windows, run from the normal, non-admin PowerShell session in the Script Cent
 .\tools\Update-Windows-ControlCenter.ps1
 ```
 
-This is read-only Preview. It verifies both sibling clones are on clean `main` branches with the expected GitHub origins and checks the tunnel mirror fingerprint and all eight file hashes. It does not pull, change the shortcut, start workers or change Docker.
+This is read-only Preview. It verifies both sibling clones are on clean `main` branches with the expected GitHub origins and checks the tunnel mirror fingerprint and all nine file hashes. It does not pull, change the shortcut, start workers or change Docker.
 
 After reviewing Preview, explicitly run:
 

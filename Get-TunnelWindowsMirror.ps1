@@ -62,7 +62,7 @@ function Get-FortisTunnelWindowsMirror {
 
     $currentRoot = Join-Path $tunnelRoot 'runtime\windows-repo\current'
     $manifestPath = Join-Path $currentRoot 'source-manifest.json'
-    $expectedManifestHash = 'D47234936171E7E47B870533AB06452BFA13E0DAA30F90ABB1367C4B66EC91E0'
+    $expectedManifestHash = '8B035C231D08D326D8D12DF4D35EE7303E925AFB1C0F46596EEC5FD02B0C226C'
     if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf) -or
         (Get-FileHash -LiteralPath $manifestPath -Algorithm SHA256).Hash -cne $expectedManifestHash) {
         throw 'Tunnel Windows source manifest is missing or has an unexpected fingerprint. Pull the reviewed tunnel main.'
@@ -76,13 +76,15 @@ function Get-FortisTunnelWindowsMirror {
         'launchers/FortisRDGLauncherV2/Common.ps1',
         'launchers/FortisRDGLauncherV2/Start-Fortis.ps1',
         'launchers/FortisRepoPlus2/Repo2DirectGuard.ps1',
-        'launchers/FortisRepoPlus2/FortisRepo2-quiet-logs.ps1'
+        'launchers/FortisRepoPlus2/FortisRepo2-quiet-logs.ps1',
+        'launchers/shared/FortisContainerPolicy.ps1'
     )
     if ($manifest.schema_version -ne 1 -or
-        $manifest.status -cne 'BYTE_EXACT_MIRROR_OF_CURRENT_SCRIPT_CONTROL_CENTER_WORKING_CHAIN' -or
-        $manifest.source_repository -cne 'script-control-center' -or
-        $manifest.source_ref -cne 'script-control-center:main' -or
-        $manifest.source_revision -cne '001ddff9b0ece358e5cfa1b336a104c7d66bee68' -or
+        $manifest.status -cne 'TUNNEL_CANONICAL_SHARED_GUARD_POLICY_GO3C' -or
+        $manifest.source_repository -cne 'tunnel' -or
+        $manifest.source_ref -cne 'tunnel:main' -or
+        $manifest.source_revision_type -cne 'sha256_file_inventory_v1' -or
+        $manifest.source_revision -cne '1192D3D34FD457B000E16B770AACD06A7505C164345B2809B0BE26795794AAE0' -or
         @($manifest.files).Count -ne $expectedFiles.Count) {
         throw 'Unexpected tunnel Windows source manifest. Nothing started.'
     }
