@@ -104,6 +104,28 @@ PID по полной командной строке без дополните�
 powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File .\Test-ScriptCatalogCompile.ps1
 ```
 
+## FileQuarantine launcher (manual registration only)
+
+The standalone `FileQuarantine-Launcher.ps1` is a **manual, opt-in** Script
+Catalog entry. It is not part of the default five-item preset, is never
+registered automatically and does not alter saved catalog data.
+
+After pulling the Script Center `main` on Windows, open the Script Catalog,
+click **«＋ Добавить»**, choose:
+`%USERPROFILE%\Repos\script-control-center\FileQuarantine-Launcher.ps1`,
+set the name **«FileQuarantine — запуск»**, leave arguments empty and choose
+**«Внутри центра»** (for captured preflight errors and a managed process) or
+**«Своё окно»**, then save. Select the entry and click **«▶ Запустить»**.
+
+The adapter delegates to the existing sibling Windows clone at
+`%USERPROFILE%\Repos\FileQuarantine` and runs its `00-Preflight.ps1` before
+launching `FileQuarantine-GUI.ps1` in Windows PowerShell 5.1 STA mode. It
+**does not** clone or pull Git, build images, create/delete Docker Volumes,
+start Tunnel, install anything, or bypass FileQuarantine's normal safety check.
+If an image such as `fileq/http-downloader:auto-name-v1` is absent, install it
+separately using FileQuarantine's documented setup process. This adapter
+reports failed preflight to the catalog log rather than pausing a CMD window.
+
 ## Docker → GitHub → Windows: Mirror application (standalone source)
 
 **Mirror UI, Docker exporters, Git actions, legacy source, tests and detailed
