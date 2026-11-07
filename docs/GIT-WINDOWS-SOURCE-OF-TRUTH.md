@@ -60,22 +60,18 @@ After reviewing a PASS, explicitly apply the paired fast-forward:
 
 ## GO3 release verifier stored in the Docker workspace
 
-`_go3-revision07/Invoke-GO3-Guard-Previews.ps1` is currently an uncommitted Docker-workspace file, not part of the Windows Git clone. It is intentionally executed on Windows because it inspects Docker Desktop and invokes the Windows Tunnel Guard launchers. Do not try to run it from `%USERPROFILE%\Repos\script-control-center` until it has been committed and pulled.
+This heading preserves the old link. The GO3 scripts are now tracked source,
+including [`_go3-revision07/Invoke-GO3-Guard-Previews.ps1`](../_go3-revision07/Invoke-GO3-Guard-Previews.ps1).
+The former copy/run command pinned container `04fed7b7…` from a dated baseline;
+it is not a routine command for the current runtime. Do not restore an old
+container, edit its pins blindly or run a historical cutover helper to make
+Preview pass. Runtime/source provenance belongs to the
+[container evidence](https://github.com/AlexPastukhh/fortis-container/blob/main/docs/audits/REPO-CONTAINER-GUARD-BASELINE-2026-11-04.md).
 
-For the current baseline, copy the exact verifier out of the running Repo container into `%TEMP%`, then execute it in ordinary, non-elevated PowerShell:
-
-```powershell
-$containerId = '04fed7b726a8536d63c4d2533cfc7ee3072956ff0c3f571504d7f709f7909030'
-$dockerPath = '/workspace/repos/script-control-center/_go3-revision07/Invoke-GO3-Guard-Previews.ps1'
-$tempScript = Join-Path $env:TEMP 'Invoke-GO3-Guard-Previews.ps1'
-docker cp "${containerId}:$dockerPath" $tempScript
-if ($LASTEXITCODE -ne 0) { throw 'Docker copy failed' }
-& $tempScript
-```
-
-The verifier is read-only: it pins the current container/image and canonical Tunnel manifest, then runs Repo1 and Repo2 Guard Preview. It does not start/stop tunnels, edit Windows profiles, repair Docker configuration or issue Sonar requests. Its current pins deliberately reject a different container/image until the source is reviewed and updated. The owner completed the corrected Windows run on 2026-11-04; it emitted `GO3_RELEASE_VERIFICATION_PASS` and validated the four volume name/destination/RW entries. The first run's malformed mount subsection is superseded and must not be reused. Actual Repo1/Repo2 reconnect and functional acceptance remain a separate pending gate.
-
-This `docker cp` workflow is an ephemeral execution bridge, not a source-sync method. Do not copy it into the Windows Git clone or commit Windows-local runtime output.
+For routine source/Guard verification use the paired updater above and current
+Tunnel source. The old corrected owner result remains dated evidence; a source
+pull or Preview is separate from actual reconnect. Any future helper refresh
+is tracked only in [BACKLOG-IMPROVEMENTS](BACKLOG-IMPROVEMENTS.md).
 
 ## Reconnect and rollback
 

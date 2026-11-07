@@ -8,7 +8,7 @@ Source for the standalone **Windows script catalog** and an optional combined Fo
 Windows update. Для Docker task → GitHub → Windows обязательны общие
 [UC-CONT-002/003](https://github.com/AlexPastukhh/fortis-container/blob/main/docs/use-cases/README.md)
 и правило чистого основного `main` [UC-CONT-019](https://github.com/AlexPastukhh/fortis-container/blob/main/docs/use-cases/worktrees.md#uc-cont-019).
-**Не редактировать `Repos/script-control-center/main`; изменения вести только в
+**Не редактировать `Repos/script-control-center`; изменения вести только в
 `Worktrees/script-control-center/<task>` и публиковать через Gateway/PR.**
 
 ## What it does
@@ -27,7 +27,10 @@ The complete Repo1/Repo2 worker chain and the one shared Guard policy are owned 
 
 The resolver requires both canonical sibling Windows Git clones on clean, synchronized `main`, verifies the approved origins and all nine manifest-pinned file hashes, then delegates to the Tunnel worker chain. Missing, dirty, stale or modified source fails closed; there is no local-launcher fallback.
 
-Windows update procedure is in [docs/GIT-WINDOWS-SOURCE-OF-TRUTH.md](docs/GIT-WINDOWS-SOURCE-OF-TRUTH.md). `tools/Update-Windows-ControlCenter.ps1` is Preview by default. Explicit `-Apply` fast-forwards `tunnel` first and Script Center second, validates the manifest and PowerShell/WinForms source, runs read-only Repo1/Repo2 Previews, and repairs the existing Desktop shortcut to `Start-ScriptCatalog.ps1`. It does **not** import registrations, start/stop workers, restart Tunnel Client or stop/recreate Docker. Do not reimport the five registrations after routine pulls.
+The paired updater is Preview by default and does not restart workers or import
+registrations. Its complete Windows procedure, checks and shortcut behavior
+belong to [GIT-WINDOWS-SOURCE-OF-TRUTH](docs/GIT-WINDOWS-SOURCE-OF-TRUTH.md),
+not a second instruction set in this README.
 
 ## Docker / Windows Git clones
 
@@ -119,18 +122,11 @@ checks the expected origin, and fails with an explicit instruction if that
 clone is missing. There are no duplicate Mirror UI sources here. No automatic
 Git clone, pull, process restart or service deployment is triggered by the launcher.
 
-To install the separate Windows clone once, from Windows PowerShell:
-
-```powershell
-git clone https://github.com/AlexPastukhh/docke-windows-mirror.git "$env:USERPROFILE\Repos\docke-windows-mirror"
-powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File "$env:USERPROFILE\Repos\docke-windows-mirror\Test-MirrorWorkflowCompile.ps1"
-powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File .\Fortis-Windows-Mirror-Status.ps1
-```
-
-Update both Git clones with clean `git pull --ff-only` before launching.
-See the [standalone README](https://github.com/AlexPastukhh/docke-windows-mirror/blob/main/README.md)
-and its [`docs/WORKFLOW.md`](https://github.com/AlexPastukhh/docke-windows-mirror/blob/main/docs/WORKFLOW.md)
-for workflow behavior and safety constraints.
+Installation and approved-source delivery belong to the
+[Mirror README](https://github.com/AlexPastukhh/docke-windows-mirror/blob/main/README.md)
+and [Windows sync UC](https://github.com/AlexPastukhh/docke-windows-mirror/blob/main/docs/use-cases/windows-sync.md#uc-mir-002).
+This repo owns only the thin compatibility launcher; it does not perform clone,
+pull or deployment as a side effect of launching it.
 
 ## Requirements and verification
 
