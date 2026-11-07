@@ -1,0 +1,5 @@
+﻿# Fortis Mirror Browser UI — import once in Script Center > «Импорт из текста».
+# Update the Windows script-control-center and docke-windows-mirror main clones first.
+# "window" keeps the one-time login URL / server errors visible; the browser
+# opens automatically. This does not run or register anything until owner import.
+Fortis Mirror — браузер | @app\Fortis-Mirror-Browser.ps1 | window

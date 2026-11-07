@@ -116,6 +116,26 @@ documentation are owned by** [`AlexPastukhh/docke-windows-mirror`](https://githu
 The Docker Git checkout is `/workspace/repo/Repos/docke-windows-mirror`;
 the separate Windows Git clone is `%USERPROFILE%\Repos\docke-windows-mirror`.
 
+For the accepted **read-only Browser UI**, use the separate Script Center
+launcher **`Fortis-Mirror-Browser.ps1`**. It validates the sibling Windows
+`docke-windows-mirror` clone, correct GitHub origin and active `main`, then
+calls the Mirror-owned `Start-MirrorAPI.ps1 -OpenBrowser`. The server binds
+only to `127.0.0.1:8765`; it opens the one-use login URL in the default browser.
+The owning PowerShell window must remain open while the UI is in use.
+If the browser does not open automatically, copy the one-use URL printed in
+that window. `Ctrl+C` stops the server.
+
+**Registration is an owner-local Script Catalog action**, not a Git commit:
+first update *both* Windows clones to their approved merged `main`. In
+Script Catalog select **«Импорт из текста»** and paste the non-comment line
+from `TEXT-IMPORT-MIRROR-BROWSER.txt`, then **«Проверить» →
+«Импортировать»**. Use mode **`window` / «Своё окно»**, not hidden, so
+startup errors and the session URL are visible. The entry is named
+**«Fortis Mirror — браузер»**; it is separate from the retained WinForms entry.
+The text importer rejects duplicates by path/arguments and never starts code.
+Neither registration nor launch performs any Git Pull/clone, Docker changes,
+Gateway activation, Windows Pull, or service installation.
+
 The stable launcher **remains here** at `Fortis-Windows-Mirror-Status.ps1`.
 It delegates GUI and `-Cli` to the sibling Windows `docke-windows-mirror` clone,
 checks the expected origin, and fails with an explicit instruction if that
