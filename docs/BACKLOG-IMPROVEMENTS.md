@@ -11,3 +11,10 @@
 - Для действий, недоступных Docker, дать одну короткую owner-команду по `UC-CONT-025`, а передачу пакета — по `UC-CONT-015`, без произвольного Shell/Docker доступа AI.
 
 **Текущие технические владельцы:** [`docs/GIT-WINDOWS-SOURCE-OF-TRUTH.md`](GIT-WINDOWS-SOURCE-OF-TRUTH.md), [`README.md`](../README.md), `tunnel/runtime/windows-repo/README.md`. Исторические implementation plans в `docs/history/` не являются вторым living backlog.
+
+## Historical GO3 helpers
+
+- Before reusing `_go3-revision06/07` for a new runtime, review their pinned
+  source/container assumptions and decide whether a maintained helper is needed.
+  Routine paired updates already have their own Preview/Apply controller; do not
+  create a second updater or auto-rewrite historical pins.
