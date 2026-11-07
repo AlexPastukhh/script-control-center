@@ -1,84 +1,84 @@
-﻿# Git as Windows launcher source of truth (paired release, 2026-11-02)
+# Script Center: Windows clone and paired update
 
-## Directory mapping
+This document owns the Windows-side procedure for updating the Script Catalog and its Repo1/Repo2 adapters. The actual worker/Guard source and Docker compatibility rules are owned by `tunnel`; see the [Tunnel Windows Repo runbook](https://github.com/AlexPastukhh/tunnel/blob/main/runtime/windows-repo/README.md) and [Guard-change checklist](https://github.com/AlexPastukhh/tunnel/blob/main/docs/FORTIS_GIT_WINDOWS_LAUNCHER_WORKFLOW.md).
 
-Docker and Windows have **separate Git checkouts**. GitHub is the only transfer mechanism; there is no shared Windows bind mount or automatic filesystem mirroring.
+## Ownership
 
-| Role | Docker | Windows |
-| --- | --- | --- |
-| Script Center UI + thin worker adapters | `/workspace/repos/script-control-center` | `%USERPROFILE%\Repos\script-control-center` |
-| Repo1/Repo2 worker + launcher source | `/workspace/repos/tunnel/runtime/windows-repo/current` | `%USERPROFILE%\Repos\tunnel\runtime\windows-repo\current` |
+- `tunnel/main` owns the Repo1/Repo2 workers, launcher chain and shared `FortisContainerPolicy.ps1`.
+- `script-control-center/main` owns the Script Catalog/Control Center UI, five registrations, thin worker adapters, resolver and paired updater.
+- Windows profiles, keys, ACLs, Tunnel Client binaries, Docker state, logs and catalog runtime data remain Windows-local; never copy them into Git.
 
-The Windows clones must be siblings under the existing `%USERPROFILE%\Repos` directory. Do not use `%LOCALAPPDATA%` as a source checkout, do not use a second `repos` folder, and do not run Windows PowerShell scripts from Docker paths.
+## Canonical paths
 
-## Execution ownership and source resolution
+| Role | Docker source | Windows clone |
+|---|---|---|
+| Script Center UI/adapters | `/workspace/repo/Repos/script-control-center` | `%USERPROFILE%\Repos\script-control-center` |
+| Repo1/Repo2 workers/Guards | `tunnel/runtime/windows-repo/current` | `%USERPROFILE%\Repos\tunnel\runtime\windows-repo\current` |
 
-1. `Start-ScriptCatalog.ps1` is the primary Desktop shortcut target. The five catalog registrations retain their absolute paths into the stable `script-control-center` clone; do not reimport them after pulls.
-2. `Repo1-Worker.ps1` and `Repo2-Worker.ps1` in Script Center are **thin adapters**. They dot-source `Get-TunnelWindowsMirror.ps1` and delegate to `%USERPROFILE%\Repos\tunnel\runtime\windows-repo\current\Repo1-Worker.ps1` / `Repo2-Worker.ps1`.
-3. The resolver accepts only the canonical clean `main` Script Center clone and its exact sibling Windows `tunnel` Git clone with approved origins, clean `main`, the pinned `source-manifest.json` fingerprint, and all nine matching SHA-256 file hashes, including the shared `launchers/shared/FortisContainerPolicy.ps1` module used by both Repo1 and Repo2. Missing, dirty, stale, modified or wrong-branch source is a hard failure. There is no fallback to `script-control-center\launchers`, `%LOCALAPPDATA%`, Docker paths or other arbitrary Windows directories.
-4. `Updater-Worker.ps1`, `Watcher-Start.ps1` and `Watcher-Stop.ps1` resolve shared `Start-Fortis.ps1` / `Common.ps1` from the same verified tunnel mirror. The RDG updater script itself remains an external Windows-local RDG dependency and is checked explicitly.
-5. The `script-control-center\launchers` tree is retained for historical source/contract tests only; Script Center worker execution no longer uses it.
+These are separate Git checkouts. GitHub is the transfer channel; there is no automatic filesystem sync or shared writable Windows bind mount. Pull only committed source.
 
-Windows-local Tunnel Client binaries, Docker CLI, profiles, keys, ACLs, logs, catalog data and the external RDG updater remain Windows-local by design. They are runtime/state dependencies, not source launchers. Never copy credentials, profiles or logs into Git.
+## Shortcut and registrations
 
-## Paired Docker → GitHub → Windows update
+The Desktop `Fortis RDG Control Center.lnk` targets `Start-ScriptCatalog.ps1` in the Script Center Windows clone. `Start-ControlCenter.ps1` is the optional older four-card shell, not the primary shortcut. The five catalog registrations retain paths into the stable Script Center clone; do not reimport them after routine pulls.
 
-Author in the two existing Docker Git checkouts. Review and test both changes, then commit/push only the intended files in each repository. The tunnel repo owns the complete Repo1/Repo2 Windows mirror; Script Center owns the UI and adapters that consume that mirror.
+## First-time clone
 
-On Windows, run from the normal, non-admin PowerShell session in the Script Center clone:
+Run only if a clone is missing; never overwrite an existing directory. Use ordinary, non-admin Windows PowerShell:
+```powershell
+$repos = Join-Path $env:USERPROFILE 'Repos'
+New-Item -ItemType Directory -Path $repos -Force | Out-Null
+foreach ($name in @('tunnel','script-control-center')) {
+    $path = Join-Path $repos $name
+    if (Test-Path -LiteralPath $path) {
+        if (-not (Test-Path -LiteralPath (Join-Path $path '.git'))) { throw "Not a Git clone: $path" }
+        git -C $path status --short --branch
+        git -C $path remote get-url origin
+    } else {
+        git clone --branch main --single-branch "https://github.com/AlexPastukhh/$name.git" $path
+        if ($LASTEXITCODE -ne 0) { throw "Clone failed: $name" }
+    }
+}
+```
+
+If a target already exists, inspect its `.git`, origin, branch and `git status` first. Do not delete or replace it to make cloning succeed.
+
+## Routine paired update
+
+From the Script Center Windows clone, first run the read-only Preview:
 
 ```powershell
 .\tools\Update-Windows-ControlCenter.ps1
 ```
 
-This is read-only Preview. It verifies both sibling clones are on clean `main` branches with the expected GitHub origins and checks the tunnel mirror fingerprint and all nine file hashes. It does not pull, change the shortcut, start workers or change Docker.
-
-After reviewing Preview, explicitly run:
+After reviewing a PASS, explicitly apply the paired fast-forward:
 
 ```powershell
 .\tools\Update-Windows-ControlCenter.ps1 -Apply
 ```
 
-`-Apply` rechecks both clean clones, fast-forwards `tunnel` first and `script-control-center` second, verifies the exact tunnel manifest and every mirrored file, verifies the Repo2 Guard pin, parses active PowerShell sources, compiles both WinForms source sets in compile-only processes, runs Repo1 and Repo2 read-only Previews from the **Windows tunnel clone**, then backs up/repairs the existing Desktop shortcut to `Start-ScriptCatalog.ps1`. It does not register/import workers, run a worker, stop/start a tunnel, stop/start Docker, or read secret contents. If a pull or preflight fails, it stops; it never resets, stashes, cleans or force-checks out a clone.
+`-Apply` checks both clean, synchronized `main` clones and approved origins; pulls `tunnel` first and Script Center second; verifies the nine-file manifest and hashes; parses PowerShell; compiles the WinForms sources; runs read-only Repo1/Repo2 Previews from the Windows Tunnel clone; then backs up/repairs the existing shortcut. It does not import registrations, start/stop a worker, restart Tunnel Client, or stop/recreate Docker.
 
-If either Windows clone is missing, create it explicitly in Windows PowerShell:
+## GO3 release verifier stored in the Docker workspace
+
+`_go3-revision07/Invoke-GO3-Guard-Previews.ps1` is currently an uncommitted Docker-workspace file, not part of the Windows Git clone. It is intentionally executed on Windows because it inspects Docker Desktop and invokes the Windows Tunnel Guard launchers. Do not try to run it from `%USERPROFILE%\Repos\script-control-center` until it has been committed and pulled.
+
+For the current baseline, copy the exact verifier out of the running Repo container into `%TEMP%`, then execute it in ordinary, non-elevated PowerShell:
 
 ```powershell
-$repos = Join-Path $env:USERPROFILE 'Repos'
-New-Item -ItemType Directory -Path $repos -Force | Out-Null
-git clone --branch main --single-branch 'https://github.com/AlexPastukhh/tunnel.git' (Join-Path $repos 'tunnel')
-git clone --branch main --single-branch 'https://github.com/AlexPastukhh/script-control-center.git' (Join-Path $repos 'script-control-center')
+$containerId = '04fed7b726a8536d63c4d2533cfc7ee3072956ff0c3f571504d7f709f7909030'
+$dockerPath = '/workspace/repos/script-control-center/_go3-revision07/Invoke-GO3-Guard-Previews.ps1'
+$tempScript = Join-Path $env:TEMP 'Invoke-GO3-Guard-Previews.ps1'
+docker cp "${containerId}:$dockerPath" $tempScript
+if ($LASTEXITCODE -ne 0) { throw 'Docker copy failed' }
+& $tempScript
 ```
 
-Do not reimport the five catalog entries after routine pulls. Their paths remain in the stable Script Center clone. Pulling source does not replace already-running processes.
+The verifier is read-only: it pins the current container/image and canonical Tunnel manifest, then runs Repo1 and Repo2 Guard Preview. It does not start/stop tunnels, edit Windows profiles, repair Docker configuration or issue Sonar requests. Its current pins deliberately reject a different container/image until the source is reviewed and updated. The owner completed the corrected Windows run on 2026-11-04; it emitted `GO3_RELEASE_VERIFICATION_PASS` and validated the four volume name/destination/RW entries. The first run's malformed mount subsection is superseded and must not be reused. Actual Repo1/Repo2 reconnect and functional acceptance remain a separate pending gate.
 
-## Controlled tunnel restart and acceptance
+This `docker cp` workflow is an ephemeral execution bridge, not a source-sync method. Do not copy it into the Windows Git clone or commit Windows-local runtime output.
 
-A successful Git pull, manifest check, PowerShell parse, WinForms compile or `Preview=PASS` is **not** a successful MCP reconnect. Keep the current working connection and recovery route until both previews pass and an owner-controlled maintenance window is ready.
+## Reconnect and rollback
 
-- Do **not** stop/recreate the `fortis-repo-test` Docker container as part of this source cutover. The tunnel scripts expect the existing pinned container/image/mounts/resources; Repo2's `Start-Fortis.ps1` may start that existing container if stopped, but it does not recreate or stop it.
-- Restart only one Windows tunnel profile at a time, from Script Center. Keep the other working profile and an independent recovery path available.
-- First stop only the existing Repo1 worker/runtime using its existing Script Center Stop action; confirm it is stopped, then Run Repo1. Confirm real MCP reads and response delivery.
-- Only after Repo1 is proven, stop only Repo2 and Run Repo2. Confirm its independent profile/browser route and real MCP response. Do not start a duplicate over a detected runtime/profile.
-- If a preview fails, do not stop anything. If a reconnect fails, stop only the failed new instance and use the documented independent recovery path. Preserve old launcher/shortcut backups until both connections are accepted.
+A successful pull, hash check, compile or Preview is not a live MCP reconnect test. If a reconnect is required, use a separate owner-controlled window, reconnect one Repo at a time, keep the other working route and recovery path available, and verify real MCP responses. Do not stop the shared Docker container as part of a routine source update.
 
-A full Docker-container stop would interrupt both tunnel routes and is **not** the procedure implemented by these launchers. Treat any container stop/recreation as a separate maintenance operation with its own backup and recovery plan.
-
-## Verification and known limits
-
-Docker offline checks:
-
-```bash
-python3 -B test_static_catalog.py
-python3 -B test_git_launcher_contract.py
-```
-
-The tunnel mirror has its own `runtime/windows-repo/test_release_contract.py`. Windows `-Apply` runs the real Windows PowerShell parser and WinForms compile-only tests. This Docker environment cannot execute the Windows tunnel client, verify Windows ACLs, run the real GUI, or prove live Repo1/Repo2 reconnect. Those remain explicit Windows acceptance steps.
-
-The installed Tunnel Client/Runtime executables under `C:\Tools\tunnel-client\...`, Windows profiles/keys, local logs, Docker container state and RDG updater remain outside Git. The exact paths and pins are documented in `tunnel/runtime/windows-repo/README.md` and its dependency inventory. Do not move them into the source mirror or substitute binaries from Docker.
-
-## Rollback
-
-- Keep the original Desktop shortcut and launcher backups until both tunnel routes pass real reconnect.
-- `git pull --ff-only` never overwrites a dirty clone; do not use `reset --hard`, `git clean`, stash or force-push to bypass a mismatch.
-- Reverting source changes does not terminate or replace an already-running process. Restore the previous reviewed commit or shortcut only through an owner-controlled action.
+If a clone is dirty, on the wrong branch or diverged, the updater stops. Preserve and review local changes; never use `reset --hard`, `git clean`, stash or force-push to bypass the gate. Keep shortcut/launcher backups until the updated routes are accepted. Current owner-reported reconnect status and remaining cold-boot limits are recorded in the Tunnel runbook.

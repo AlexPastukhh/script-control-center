@@ -1,6 +1,15 @@
-﻿# Script Control Center
+# Script Control Center
 
-Source for the standalone **Windows script catalog** and an optional combined Fortis/RDG Control Center. The five built-in worker entries point to this stable Windows Git clone. Repo 1/2 and shared Fortis adapters now resolve their executable worker/launcher source only from the sibling `%USERPROFILE%\Repos\tunnel` clone, verify its pinned manifest and all nine SHA-256 values, and fail closed if that clone is missing, dirty, off `main`, or stale. This source change is **not** proof of a successful Windows reconnect.
+Source for the standalone **Windows script catalog** and an optional combined Fortis/RDG Control Center. The five built-in worker entries point to this stable Windows Git clone. Repo1/Repo2 adapters resolve executable worker/launcher source only from the sibling `%USERPROFILE%\Repos\tunnel` clone, verify its pinned nine-file manifest and fail closed if either clone is missing, dirty, off `main`, or stale. The canonical Tunnel runbook records Windows acceptance; source hashes alone never prove a live reconnect.
+
+## Локальные Use Cases
+
+[Реестр Script Center](docs/use-cases/README.md) — Script Catalog и paired
+Windows update. Для Docker task → GitHub → Windows обязательны общие
+[UC-CONT-002/003](https://github.com/AlexPastukhh/fortis-container/blob/main/docs/use-cases/README.md)
+и правило чистого основного `main` [UC-CONT-019](https://github.com/AlexPastukhh/fortis-container/blob/main/docs/use-cases/worktrees.md#uc-cont-019).
+**Не редактировать `Repos/script-control-center/main`; изменения вести только в
+`Worktrees/script-control-center/<task>` и публиковать через Gateway/PR.**
 
 ## What it does
 
@@ -10,55 +19,26 @@ Source for the standalone **Windows script catalog** and an optional combined Fo
 - The `Repo*-Worker.ps1`, `Updater-Worker.ps1`, and `Watcher-*.ps1` files are **Windows adapters**, not portable launchers or permission to change working infrastructure.
 - `BUNDLE-MANIFEST.md` documents the optional preset and external installed-file dependencies. Importing a preset is registration-only and does not launch the workers.
 
-## Canonical Git-to-Windows source (transition)
+## Ownership and canonical Windows source
 
-The intended workflow is **Docker Git checkouts → commit/push both repos → Windows fast-forward pull of both sibling clones → read-only preflight → controlled per-tunnel restart**. The Desktop `Fortis RDG Control Center.lnk` shortcut targets **`Start-ScriptCatalog.ps1`** in `%USERPROFILE%\Repos\script-control-center`, not `Start-ControlCenter.ps1` or `%LOCALAPPDATA%` copies. The catalog's Repo1/Repo2 adapters call `Get-TunnelWindowsMirror.ps1`, which accepts only `%USERPROFILE%\Repos\tunnel\runtime\windows-repo\current`, checks both canonical clean `main` clones and the pinned nine-file manifest (including the shared Repo1/Repo2 Guard policy), then delegates to the worker chain there. Updater/Watcher adapters resolve shared `Common.ps1` / `Start-Fortis.ps1` from the same tunnel mirror. The old `script-control-center\launchers` copies are retained for source history/contract tests, **not used by the Script Center workers**. Runtime binaries, credentials, profiles and logs stay in their documented Windows-local locations; the RDG updater remains an external dependency. Pulling source does **not** restart a live tunnel or prove reconnect compatibility.
+This repository owns the Script Catalog/Control Center UI, the five catalog registrations, thin worker adapters, `Get-TunnelWindowsMirror.ps1` resolver and paired Windows updater. It does **not** own the Repo1/Repo2 security policy or the canonical worker/launcher implementation.
 
-See [Git-to-Windows operating procedure](docs/GIT-WINDOWS-SOURCE-OF-TRUTH.md) and `tools/Update-Windows-ControlCenter.ps1` (read-only by default; explicit `-Apply` fast-forwards `tunnel` first and `script-control-center` second, validates the mirror, compiles the WinForms sources, runs read-only Repo1/Repo2 Previews, then repairs the existing shortcut). The five catalog registrations retain their absolute paths to the stable Script Center clone; **do not reimport them after pulls**. Do not stop the Fortis Docker container as part of this source update: preserve it and restart Repo1/Repo2 Windows tunnel processes one at a time after both previews pass. Real reconnect is still unverified until Windows acceptance.
+The complete Repo1/Repo2 worker chain and the one shared Guard policy are owned by [`tunnel/runtime/windows-repo/current`](https://github.com/AlexPastukhh/tunnel/tree/main/runtime/windows-repo/current). Shared policy: `launchers/shared/FortisContainerPolicy.ps1`. Repo1/Repo2 retain only their profile-specific tunnel, key/ACL and quiet-launch checks. The old `script-control-center\launchers` tree is retained for source history/contract tests, not used by the active workers.
 
-## Зеркальная директория репозиториев (Docker ↔ Windows)
+The resolver requires both canonical sibling Windows Git clones on clean, synchronized `main`, verifies the approved origins and all nine manifest-pinned file hashes, then delegates to the Tunnel worker chain. Missing, dirty, stale or modified source fails closed; there is no local-launcher fallback.
 
-Это **логическое зеркало через GitHub**, а не одна общая папка и не Docker bind mount:
+Windows update procedure is in [docs/GIT-WINDOWS-SOURCE-OF-TRUTH.md](docs/GIT-WINDOWS-SOURCE-OF-TRUTH.md). `tools/Update-Windows-ControlCenter.ps1` is Preview by default. Explicit `-Apply` fast-forwards `tunnel` first and Script Center second, validates the manifest and PowerShell/WinForms source, runs read-only Repo1/Repo2 Previews, and repairs the existing Desktop shortcut to `Start-ScriptCatalog.ps1`. It does **not** import registrations, start/stop workers, restart Tunnel Client or stop/recreate Docker. Do not reimport the five registrations after routine pulls.
 
-| Роль | Путь |
-| --- | --- |
-| Исходники в Docker | `/workspace/repo/Repos/<repo>` (тот же volume-backed каталог, что `/workspace/repos/<repo>`) |
-| Удалённый источник обмена | `https://github.com/AlexPastukhh/<repo>.git` |
-| Windows-клон | `%USERPROFILE%\Repos\<repo>` |
+## Docker / Windows Git clones
 
-Для этого приложения соответствующая папка Windows — **`C:\Users\alexa\Repos\script-control-center`**. Используем **уже принятую Windows-папку `Repos`**, а не вторую копию `%USERPROFILE%\repos` в документации (Windows не различает эти имена по регистру), не `%LOCALAPPDATA%\FortisRDGControlCenter` и не Docker volume. Новые файлы в Docker не появляются автоматически на Windows: после коммита и `git push` владелец выполняет `git pull --ff-only` в нужном Windows-клоне. Незакоммиченные Docker-файлы не зеркалируются.
+| Роль | Docker source | Windows clone |
+|---|---|---|
+| Script Catalog, UI и adapters | `/workspace/repo/Repos/script-control-center` | `%USERPROFILE%\Repos\script-control-center` |
+| Repo1/Repo2 workers и shared Guard | Git repo `tunnel` → `runtime/windows-repo/current` | `%USERPROFILE%\Repos\tunnel\runtime\windows-repo\current` |
 
-Первое создание Windows-клона (в **обычном Windows PowerShell**, не через Docker MCP):
+Это **отдельные Git-клоны**, не общая папка и не bind mount. GitHub — канал передачи: Docker edit → commit/push → Windows `git pull --ff-only`. Незакоммиченные изменения и runtime state не синхронизируются. Не создавать вторые source-копии в `%LOCALAPPDATA%` и не копировать Git-файлы вручную.
 
-```powershell
-$mirror = Join-Path $env:USERPROFILE 'Repos'
-$repo = Join-Path $mirror 'script-control-center'
-if (Test-Path -LiteralPath $repo) {
-    if (-not (Test-Path -LiteralPath (Join-Path $repo '.git'))) {
-        throw "Каталог существует, но это не Git-клон: $repo"
-    }
-    Write-Host "Git-клон уже существует: $repo"
-} else {
-    New-Item -ItemType Directory -Path $mirror -Force | Out-Null
-    git clone --branch main --single-branch 'https://github.com/AlexPastukhh/script-control-center.git' $repo
-    if ($LASTEXITCODE -ne 0) { throw 'Клонирование не удалось' }
-}
-git -C $repo remote -v
-git -C $repo rev-parse HEAD
-```
-
-Команда **только создаёт или проверяет клон**. На текущей Windows-машине ярлык уже направлен на `Start-ScriptCatalog.ps1`, а пять регистраций обновлены до worker-файлов в клоне. Дальнейшее обновление после `git push` должно обновить **оба** соседних клона — сначала `tunnel`, затем `script-control-center`. Из Windows PowerShell можно выполнить:
-
-```powershell
-$repos = Join-Path $env:USERPROFILE 'Repos'
-foreach ($name in @('tunnel','script-control-center')) {
-    $repo = Join-Path $repos $name
-    git -C $repo pull --ff-only origin main
-    if ($LASTEXITCODE -ne 0) { throw "Git pull failed: $name" }
-}
-```
-
-Либо запустить `tools\Update-Windows-ControlCenter.ps1 -Apply` из Script Center clone: он предварительно проверяет оба чистых `main` клона, обновляет `tunnel` первым, затем Script Center, проверяет восемь файлов зеркала и запускает только read-only Previews. Повторно создавать ярлык и импортировать штатный набор после pull **не нужно**. Уже работающие процессы не заменяются. Не удалять другие репозитории из `Repos`; не путать Windows-клоны с `/workspace/repo/Repos` в Docker.
+Создание отсутствующих Windows-клонов, проверка существующих путей и безопасное обновление обоих репозиториев описаны в [docs/GIT-WINDOWS-SOURCE-OF-TRUTH.md](docs/GIT-WINDOWS-SOURCE-OF-TRUTH.md). Для routine update используй `tools/Update-Windows-ControlCenter.ps1` (Preview по умолчанию, `-Apply` после проверки); не reimport-ить пять catalog registrations после pull.
 
 ## Скрипт-центр: стабильный журнал и внешние PowerShell-запуски
 
@@ -181,3 +161,9 @@ Infrastructure ownership: the `tunnel` repository owns the Fortis Repo/Tunnel sa
 ## Security and local state
 
 Do not commit credentials, personal paths, live process manifests, catalog databases, generated logs, secrets, Windows shortcuts, or runtime configuration. Registered scripts are arbitrary code with the launcher's Windows privileges. Adding a script to the catalog does **not** establish that the script is safe. A separate owner-controlled acceptance is required for any Windows installation or live process change.
+
+
+## Будущие улучшения
+
+Единый Script Center backlog: [BACKLOG-IMPROVEMENTS](docs/BACKLOG-IMPROVEMENTS.md).
+Он не разрешает Windows или production-мутации.
