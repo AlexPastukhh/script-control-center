@@ -1,0 +1,3 @@
+﻿# Import via Script Catalog > «Импорт из текста» > «Проверить» > «Импортировать».
+# Does not start the proxy; choose window mode to see the process console.
+Qwen — Fortis MCP | @app\Start-Qwen-Fortis-MCP.ps1 | window
