@@ -21,6 +21,11 @@ Worker chain/Guards являются исходниками `tunnel`, не SCC. 
 не происходит из Git и не запускает скрипт. `-OpenBrowser` открывает локальный
 read-only UI, без fetch/pull/сервисов/активации Gateway.
 
+**Gitleaks:** отдельная ручная запись `window` из
+`TEXT-IMPORT-GITLEAKS.txt` → `Start-GitleaksScanner.cmd`, не в preset.
+`cmd` не ослабляет PowerShell Execution Policy. Подробности офлайн-сканирования,
+приватных JSON и Windows-проверки: [Gitleaks](../GITLEAKS-SCANNER.md).
+
 **Готово:** exact registered item и допустимый runtime/Preview подтверждены,
 отсутствие выполнения не подменено успешной регистрацией.
 
