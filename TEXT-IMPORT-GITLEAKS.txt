@@ -1,0 +1,3 @@
+﻿# Импортировать вручную в Script Catalog -> Импорт из текста -> Проверить -> Импортировать.
+# Только режим window; запуск не меняет Execution Policy и не включает сервисы.
+Gitleaks — локальная проверка | @app\Start-GitleaksScanner.cmd | window
