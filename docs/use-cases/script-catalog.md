@@ -23,3 +23,9 @@ read-only UI, без fetch/pull/сервисов/активации Gateway.
 
 **Готово:** exact registered item и допустимый runtime/Preview подтверждены,
 отсутствие выполнения не подменено успешной регистрацией.
+
+**Qwen MCP:** отдельный запускатель [`Start-Qwen-Fortis-MCP.ps1`](../../Start-Qwen-Fortis-MCP.ps1)
+через Windows `py -m uv tool run mcp-proxy`, без Docker/Repo1/Repo2 lifecycle
+изменений. Опциональная регистрация через [`TEXT-IMPORT-QWEN-MCP.txt`](../../TEXT-IMPORT-QWEN-MCP.txt),
+режим `window`; [порядок и границы](../QWEN-MCP-LAUNCHER.md).
+Существующий прокси на 18765 не запускать повторно.
