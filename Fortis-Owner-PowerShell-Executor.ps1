@@ -60,10 +60,30 @@ try {
     $null = Get-Command py.exe -CommandType Application -ErrorAction Stop
     $branch = (& $git -C $repo branch --show-current | Out-String).Trim()
     if ($LASTEXITCODE -ne 0 -or $branch -cne 'main') { throw 'OWNER_SHELL_SOURCE_NOT_MAIN' }
+    # Preserve the reviewed Mirror base and only permit the documented
+    # Gateway READ runbook update. Other Mirror changes require new review.
+    $approvedBase = 'a5cb3e9f61e68331c11337eb5da4af056d27660c'
     $sha = (& $git -C $repo rev-parse HEAD | Out-String).Trim()
+    if ($LASTEXITCODE -ne 0 -or $sha -cnotmatch '^[0-9a-f]{40}$') {
+        throw 'OWNER_SHELL_SOURCE_HEAD_INVALID'
+    }
+    & $git -C $repo merge-base --is-ancestor $approvedBase $sha | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'OWNER_SHELL_SOURCE_BASE_MISMATCH' }
+    $changed = @(& $git -C $repo diff --name-only --no-ext-diff $approvedBase $sha)
     if ($LASTEXITCODE -ne 0 -or
-        $sha -cne 'a5cb3e9f61e68331c11337eb5da4af056d27660c') {
-        throw 'OWNER_SHELL_SOURCE_SHA_MISMATCH'
+        @($changed | Where-Object { $_ -cne 'docs/GATEWAY-READ-ONLY.md' }).Count -ne 0) {
+        throw 'OWNER_SHELL_SOURCE_DIFF_DENIED'
+    }
+    # Ancestry/diff is the main guard; pin the executable source objects too.
+    $sourceBlobs = [ordered]@{
+        'Start-OwnerPowerShellExecutor.ps1' = '36798dbc1c48829eb395b08128618ac3c8962b57'
+        'mirror_api' = '390ad3cd7938364a5861cb9d3ef707f31d7037b9'
+    }
+    foreach ($rel in $sourceBlobs.Keys) {
+        $actual = (& $git -C $repo rev-parse --verify ('HEAD:' + $rel) | Out-String).Trim()
+        if ($LASTEXITCODE -ne 0 -or $actual -cne $sourceBlobs[$rel]) {
+            throw 'OWNER_SHELL_SOURCE_BLOB_MISMATCH'
+        }
     }
     $dirty = @(& $git -C $repo status --porcelain=v1 --untracked-files=all)
     if ($LASTEXITCODE -ne 0 -or $dirty.Count -ne 0) {
