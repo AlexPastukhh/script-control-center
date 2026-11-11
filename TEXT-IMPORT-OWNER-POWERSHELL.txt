@@ -1,0 +1,3 @@
+﻿# Opt-in. Script Center > Импорт из текста > Проверить > Импортировать
+# See docs/OWNER-POWERSHELL-EXECUTOR-LAUNCH.md before starting.
+Fortis — PowerShell Executor | @app\Fortis-Owner-PowerShell-Executor.ps1 | window
