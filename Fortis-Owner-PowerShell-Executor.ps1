@@ -5,7 +5,7 @@ Does not provision credentials, create a receipt DB, or deploy Gateway.
 Import as window (Своё окно) only; never run as Administrator.
 #>
 [CmdletBinding()]
-param()
+param([switch]$Configure)
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
@@ -41,7 +41,196 @@ function Assert-PrivateFile {
             }
         }
     }
+    if ($Label -ceq 'receiptDb') {
+        # The executor may create a DB automatically; reject empty/wrong files.
+        # This must be the owner's EXISTING SQLite receipt store, not a new one.
+        $stream = [IO.File]::Open($path, [IO.FileMode]::Open,
+                                  [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite)
+        try {
+            if ($stream.Length -lt 100) { throw 'OWNER_SHELL_RECEIPT_DB_INVALID' }
+            $header = New-Object byte[] 16
+            if ($stream.Read($header, 0, 16) -ne 16 -or
+                [Text.Encoding]::ASCII.GetString($header) -cne ("SQLite format 3" + [char]0)) {
+                throw 'OWNER_SHELL_RECEIPT_DB_INVALID'
+            }
+        } finally { $stream.Dispose() }
+    }
     return $path
+}
+
+function Show-OwnerShellSetup {
+    param($Previous)
+    Add-Type -AssemblyName System.Windows.Forms, System.Drawing -ErrorAction Stop
+
+    $form = New-Object System.Windows.Forms.Form
+    $form.Text = 'Fortis — настройка Windows Executor'
+    $form.Size = New-Object System.Drawing.Size(850, 510)
+    $form.MinimumSize = $form.Size
+    $form.MaximumSize = $form.Size
+    $form.StartPosition = 'CenterScreen'
+    $form.FormBorderStyle = 'FixedDialog'
+    $form.MaximizeBox = $false
+    $form.MinimizeBox = $false
+
+    $heading = New-Object System.Windows.Forms.Label
+    $heading.Location = New-Object System.Drawing.Point(22, 18)
+    $heading.Size = New-Object System.Drawing.Size(790, 48)
+    $heading.Text = 'Выберите уже существующие файлы. Сохраняются только пути, не ключи или секреты.' +
+        [Environment]::NewLine + 'Для receiptDb используйте ТУ ЖЕ базу квитанций, не новую пустую базу.'
+    $form.Controls.Add($heading)
+
+    $fields = [ordered]@{
+        serverCert = @('Сертификат сервера', 'windows\server.pem')
+        serverKey = @('Ключ сервера', 'windows\server.key')
+        clientCA = @('CA клиента Gateway', 'windows\client-ca.pem')
+        secretFile = @('Файл секрета', 'windows\secret.txt')
+        receiptDb = @('База квитанций', 'receipts\owner-shell.sqlite3')
+    }
+    $boxes = @{}
+    $index = 0
+    foreach ($name in $fields.Keys) {
+        $row = $fields[$name]
+        $top = 83 + (54 * $index)
+        $label = New-Object System.Windows.Forms.Label
+        $label.Text = $row[0]
+        $label.Location = New-Object System.Drawing.Point(20, $top)
+        $label.Size = New-Object System.Drawing.Size(165, 24)
+        $form.Controls.Add($label)
+
+        $box = New-Object System.Windows.Forms.TextBox
+        $box.Location = New-Object System.Drawing.Point(188, ($top - 3))
+        $box.Size = New-Object System.Drawing.Size(530, 26)
+        $box.Name = $name
+        $suggestion = Join-Path (Join-Path $env:LOCALAPPDATA 'Fortis\OwnerShell') $row[1]
+        if ($null -ne $Previous) {
+            $box.Text = [string]$Previous.$name
+        } elseif (Test-Path -LiteralPath $suggestion -PathType Leaf) {
+            $box.Text = $suggestion
+        }
+        $boxes[$name] = $box
+        $form.Controls.Add($box)
+
+        $browse = New-Object System.Windows.Forms.Button
+        $browse.Text = 'Обзор...'
+        $browse.Location = New-Object System.Drawing.Point(728, ($top - 5))
+        $browse.Size = New-Object System.Drawing.Size(85, 30)
+        $browse.Tag = $box
+        $browse.Add_Click({
+            param($sender, $eventArgs)
+            $picker = New-Object System.Windows.Forms.OpenFileDialog
+            $picker.Title = 'Выберите существующий файл'
+            $picker.CheckFileExists = $true
+            $picker.Multiselect = $false
+            $picker.RestoreDirectory = $true
+            try {
+                $destination = [System.Windows.Forms.TextBox]$sender.Tag
+                if (Test-Path -LiteralPath $destination.Text -PathType Leaf) {
+                    $picker.FileName = $destination.Text
+                }
+                if ($picker.ShowDialog($form) -eq [System.Windows.Forms.DialogResult]::OK) {
+                    $destination.Text = $picker.FileName
+                }
+            } finally { $picker.Dispose() }
+        })
+        $form.Controls.Add($browse)
+        $index++
+    }
+
+    $notice = New-Object System.Windows.Forms.Label
+    $notice.Location = New-Object System.Drawing.Point(20, 365)
+    $notice.Size = New-Object System.Drawing.Size(785, 32)
+    $notice.Text = 'Проверяются LOCALAPPDATA и права на приватные файлы. ' +
+        'Ошибка появится здесь, окно останется открытым.'
+    $form.Controls.Add($notice)
+
+    $save = New-Object System.Windows.Forms.Button
+    $save.Text = 'Проверить и сохранить'
+    $save.Location = New-Object System.Drawing.Point(580, 402)
+    $save.Size = New-Object System.Drawing.Size(150, 30)
+    $save.Add_Click({
+        try {
+            $selected = [ordered]@{}
+            foreach ($name in $fields.Keys) {
+                $selected[$name] = Assert-PrivateFile ([string]$boxes[$name].Text) $name (
+                    $name -in @('serverKey','secretFile','receiptDb'))
+            }
+            if ($null -ne $Previous -and
+                $selected['receiptDb'] -cne $Previous.receiptDb) {
+                throw 'OWNER_SHELL_RECEIPT_DB_CHANGE_REQUIRES_REVIEW'
+            }
+            $form.Tag = $selected
+            $form.DialogResult = [System.Windows.Forms.DialogResult]::OK
+            $form.Close()
+        } catch {
+            $message = $_.Exception.Message
+            if ($message -like 'OWNER_SHELL_ACL_*') {
+                $message += [Environment]::NewLine +
+                    'Права файла должны быть защищены: только текущий пользователь, SYSTEM и Administrators. ' +
+                    'Настройка не меняет ACL автоматически.'
+            }
+            [void][System.Windows.Forms.MessageBox]::Show(
+                $form, $message, 'Проверка файлов Executor',
+                [System.Windows.Forms.MessageBoxButtons]::OK,
+                [System.Windows.Forms.MessageBoxIcon]::Warning)
+        }
+    })
+    $form.Controls.Add($save)
+
+    $cancel = New-Object System.Windows.Forms.Button
+    $cancel.Text = 'Отмена'
+    $cancel.Location = New-Object System.Drawing.Point(735, 402)
+    $cancel.Size = New-Object System.Drawing.Size(78, 30)
+    $cancel.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
+    $form.Controls.Add($cancel)
+    $form.AcceptButton = $save
+    $form.CancelButton = $cancel
+
+    try {
+        $outcome = $form.ShowDialog()
+        if ($outcome -eq [System.Windows.Forms.DialogResult]::OK) {
+            return $form.Tag
+        }
+        return $null
+    } finally { $form.Dispose() }
+}
+
+function Save-OwnerShellPaths {
+    param($Settings, $User, [string]$ConfigPath, [bool]$ReplaceExisting)
+    $directory = Split-Path -Parent $ConfigPath
+    if (-not (Test-Path -LiteralPath $directory -PathType Container)) {
+        $null = New-Item -ItemType Directory -Path $directory -Force
+    }
+    $temp = Join-Path $directory ('setup-' + [guid]::NewGuid().ToString('N') + '.tmp')
+    try {
+        [IO.File]::WriteAllText($temp, ($Settings | ConvertTo-Json -Depth 3),
+                                [Text.UTF8Encoding]::new($false))
+        $acl = Get-Acl -LiteralPath $temp
+        $acl.SetAccessRuleProtection($true, $false)
+        $acl.SetOwner($User.User)
+        $acl.SetAccessRule([Security.AccessControl.FileSystemAccessRule]::new(
+            $User.User, [Security.AccessControl.FileSystemRights]::FullControl,
+            [Security.AccessControl.AccessControlType]::Allow))
+        Set-Acl -LiteralPath $temp -AclObject $acl -ErrorAction Stop
+        $null = Assert-PrivateFile $temp 'newConfig' $true
+        if ($ReplaceExisting) {
+            $null = Assert-PrivateFile $ConfigPath 'config' $true
+            # Preserve the old protected file if the atomic replacement fails.
+            $backup = Join-Path $directory ('prior-' + [guid]::NewGuid().ToString('N') + '.json')
+            [IO.File]::Replace($temp, $ConfigPath, $backup)
+            $null = Assert-PrivateFile $ConfigPath 'config' $true
+            if (Test-Path -LiteralPath $backup) {
+                Remove-Item -LiteralPath $backup -Force -ErrorAction Stop
+            }
+        } else {
+            if (Test-Path -LiteralPath $ConfigPath) { throw 'OWNER_SHELL_CONFIG_ALREADY_EXISTS' }
+            Move-Item -LiteralPath $temp -Destination $ConfigPath -ErrorAction Stop
+            $null = Assert-PrivateFile $ConfigPath 'config' $true
+        }
+    } finally {
+        if (Test-Path -LiteralPath $temp) {
+            Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue
+        }
+    }
 }
 
 try {
@@ -97,51 +286,31 @@ try {
 
     $configPath = Join-Path $env:LOCALAPPDATA 'Fortis\OwnerShell\script-center-launch.json'
     $names = @('serverCert','serverKey','clientCA','secretFile','receiptDb')
-    if (-not (Test-Path -LiteralPath $configPath -PathType Leaf)) {
+    $exists = Test-Path -LiteralPath $configPath -PathType Leaf
+    $data = $null
+    if ($exists) {
+        $config = Assert-PrivateFile $configPath 'config' $true
+        $data = Get-Content -LiteralPath $config -Raw -Encoding UTF8 |
+            ConvertFrom-Json -ErrorAction Stop
+        if (@($data.PSObject.Properties.Name).Count -ne $names.Count -or
+            @($names | Where-Object { $data.PSObject.Properties.Name -cnotcontains $_ }).Count -ne 0) {
+            throw 'OWNER_SHELL_CONFIG_SCHEMA_INVALID'
+        }
+    }
+    if (-not $exists -or $Configure) {
         if (@(Get-NetTCPConnection -LocalPort 10443 -State Listen -ErrorAction SilentlyContinue).Count -ne 0) {
             throw 'OWNER_SHELL_PORT_IN_USE_DO_NOT_DUPLICATE'
         }
-        Write-Host 'ONE-TIME SETUP: enter only file PATHS, not key or token contents.'
-        Write-Host 'Use the SAME EXISTING SQLite receipt database, never a new empty DB.'
-        $settings = [ordered]@{}
-        foreach ($name in $names) {
-            $inputPath = Read-Host ('Existing absolute LOCALAPPDATA file path for ' + $name)
-            $settings[$name] = Assert-PrivateFile $inputPath $name (
-                $name -in @('serverKey','secretFile','receiptDb'))
+        $settings = Show-OwnerShellSetup $data
+        if ($null -eq $settings) {
+            Write-Host 'OWNER_SHELL_SETUP_CANCELLED'
+            return
         }
-        $directory = Split-Path -Parent $configPath
-        if (-not (Test-Path -LiteralPath $directory -PathType Container)) {
-            $null = New-Item -ItemType Directory -Path $directory -Force
-        }
-        $temp = Join-Path $directory ('setup-' + [guid]::NewGuid().ToString('N') + '.tmp')
-        try {
-            [IO.File]::WriteAllText($temp,($settings | ConvertTo-Json -Depth 3),
-                                    [Text.UTF8Encoding]::new($false))
-            $acl = Get-Acl -LiteralPath $temp
-            $acl.SetAccessRuleProtection($true,$false)
-            $acl.SetOwner($user.User)
-            $acl.SetAccessRule([Security.AccessControl.FileSystemAccessRule]::new(
-                $user.User,[Security.AccessControl.FileSystemRights]::FullControl,
-                [Security.AccessControl.AccessControlType]::Allow))
-            Set-Acl -LiteralPath $temp -AclObject $acl -ErrorAction Stop
-            if (Test-Path -LiteralPath $configPath) { throw 'OWNER_SHELL_CONFIG_ALREADY_EXISTS' }
-            Move-Item -LiteralPath $temp -Destination $configPath -ErrorAction Stop
-        } finally {
-            if (Test-Path -LiteralPath $temp) {
-                Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue
-            }
-        }
+        Save-OwnerShellPaths $settings $user $configPath $exists
         Write-Host 'OWNER_SHELL_PATHS_CONFIGURED=YES'
         Write-Host 'OWNER_SHELL_STARTED=NO'
-        Write-Host 'Review local path-only config; click Start again to launch.'
+        Write-Host 'Paths saved securely. Launch the catalog entry again to start Executor.'
         return
-    }
-    $config = Assert-PrivateFile $configPath 'config' $true
-    $data = Get-Content -LiteralPath $config -Raw -Encoding UTF8 |
-        ConvertFrom-Json -ErrorAction Stop
-    if (@($data.PSObject.Properties.Name).Count -ne $names.Count -or
-        @($names | Where-Object { $data.PSObject.Properties.Name -cnotcontains $_ }).Count -ne 0) {
-        throw 'OWNER_SHELL_CONFIG_SCHEMA_INVALID'
     }
     $paths = @{}
     foreach ($name in $names) {
@@ -158,6 +327,16 @@ try {
     if (-not $?) { throw 'OWNER_SHELL_EXECUTOR_FAILED' }
 }
 catch {
-    [Console]::Error.WriteLine('OWNER_SHELL_SCRIPT_CENTER_STOP: ' + $_.Exception.Message)
+    $message = 'OWNER_SHELL_SCRIPT_CENTER_STOP: ' + $_.Exception.Message
+    [Console]::Error.WriteLine($message)
+    try {
+        Add-Type -AssemblyName System.Windows.Forms -ErrorAction Stop
+        [void][System.Windows.Forms.MessageBox]::Show(
+            $message, 'Fortis Windows Executor — запуск остановлен',
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Error)
+    } catch {
+        # Keep the original error as the authoritative outcome.
+    }
     exit 1
 }

@@ -36,6 +36,27 @@ class OwnerPowerShellAdapterTest(unittest.TestCase):
         self.assertIn("OWNER_SHELL_SOURCE_DIRTY",source)
         self.assertIn("OWNER_SHELL_SOURCE_ORIGIN_INVALID",source)
 
+    def test_one_time_winforms_setup_and_protected_persistence(self):
+        source=(ROOT/"Fortis-Owner-PowerShell-Executor.ps1").read_text("utf-8-sig")
+        setup=source[source.index("function Show-OwnerShellSetup"):source.index("function Save-OwnerShellPaths")]
+        save=source[source.index("function Save-OwnerShellPaths"):source.index("\ntry {",source.index("function Save-OwnerShellPaths"))]
+        for expected in (
+            "System.Windows.Forms.Form", "System.Windows.Forms.OpenFileDialog",
+            "serverCert", "serverKey", "clientCA", "secretFile", "receiptDb",
+            "OWNER_SHELL_ACL_*", "ShowDialog()", "ShowDialog($form)",
+            "return $null", "Assert-PrivateFile", "OWNER_SHELL_RECEIPT_DB_CHANGE_REQUIRES_REVIEW"
+        ):
+            self.assertIn(expected,setup)
+        self.assertNotIn("Read-Host",source)
+        self.assertIn("OWNER_SHELL_RECEIPT_DB_INVALID",source)
+        self.assertIn("[IO.File]::Replace($temp, $ConfigPath, $backup)",save)
+        self.assertIn("SetAccessRuleProtection($true, $false)",save)
+        self.assertIn("Assert-PrivateFile $ConfigPath 'config' $true",save)
+        self.assertIn("if (-not $exists -or $Configure)",source)
+        self.assertIn("Save-OwnerShellPaths $settings $user $configPath $exists",source)
+        self.assertIn("OWNER_SHELL_PATHS_CONFIGURED=YES",source)
+        self.assertIn("MessageBox",source)
+
     def test_manual_registration(self):
         content=(ROOT/"TEXT-IMPORT-OWNER-POWERSHELL.txt").read_bytes()
         self.assertTrue(content.startswith(bytes.fromhex("efbbbf")))
