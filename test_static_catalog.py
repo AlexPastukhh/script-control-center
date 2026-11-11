@@ -14,6 +14,16 @@ class RegistrationChecks(unittest.TestCase):
                         'StopEntry','CreateNoWindow=true','Mode="hidden"','IsLive(', 'LogPath('):
             self.assertIn(feature,source)
         self.assertIn('DtdProcessing=DtdProcessing.Prohibit',source)
+    def test_window_mode_opens_independent_interactive_console(self):
+        source=(ROOT/'ScriptCatalog.cs').read_text()
+        block=source[source.index('private void StartEntry()'):source.index('private void StopEntry()')]
+        self.assertIn('if(e.Mode=="window")',block)
+        self.assertIn('psi.UseShellExecute=true;',block)
+        self.assertIn('psi.WindowStyle=ProcessWindowStyle.Normal;',block)
+        self.assertIn('psi.CreateNoWindow=false;',block)
+        self.assertIn('if(e.Mode=="hidden")',block)
+        self.assertIn('psi.CreateNoWindow=true;',block)
+        self.assertIn('var p=Process.Start(psi)',block)
     def test_runner_is_independent_and_cooperative(self):
         source=(ROOT/'Script-Runner.ps1').read_text(encoding='utf-8-sig')
         for text in ('-File $', '[RUNNER ERROR]', 'WaitForExit(500)','File.Exists(stopFile)','[EXIT]'):
