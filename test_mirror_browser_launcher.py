@@ -29,6 +29,32 @@ class MirrorBrowserLauncherContract(unittest.TestCase):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, code.split('#>', 1)[-1])
 
+    def test_legacy_script_center_entry_defaults_to_browser_and_keeps_cli(self):
+        code=(ROOT / 'Fortis-Windows-Mirror-Status.ps1').read_bytes()
+        self.assertEqual(code[:3], bytes((239, 187, 191)))
+        source=code.decode('utf-8-sig')
+        for marker in ('if ($Cli -or $Notify)', "'Fortis-Mirror-Browser.ps1'",
+                       "'Fortis-Windows-Mirror-Status.ps1'",
+                       '& $legacy -MirrorRoot $MirrorRoot -Cli:$Cli -Notify:$Notify',
+                       '& $browser -MirrorRoot $MirrorRoot',
+                       'MIRROR_BROWSER_ADAPTER_MISSING_UPDATE_SCRIPT_CENTER',
+                       'MIRROR_SOURCE_UNEXPECTED_ORIGIN'):
+            with self.subTest(marker=marker):self.assertIn(marker,source)
+        self.assertLess(source.index('if ($Cli -or $Notify)'),
+                        source.index('& $browser -MirrorRoot $MirrorRoot'))
+        for forbidden in ('git pull','git fetch','git clone','git push','git reset',
+                          'git stash','Start-Process','Invoke-Expression',
+                          'Set-Content','catalog.xml','Manage-Integrations'):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden,source.split('#>',1)[-1])
+
+    def test_source_docs_require_owner_window_mode_on_existing_entry(self):
+        readme=(ROOT / 'README.md').read_text(encoding='utf-8-sig')
+        self.assertIn('legacy Script Center entry',readme)
+        self.assertIn('mode window',readme)
+        self.assertIn('-Cli',readme)
+        self.assertIn('no automatic catalog migration',readme)
+
     def test_import_text_is_opt_in_window_mode_and_targets_wrapper(self):
         blob = (ROOT / 'TEXT-IMPORT-MIRROR-BROWSER.txt').read_bytes()
         self.assertTrue(blob.startswith(b'\xef\xbb\xbf'))
