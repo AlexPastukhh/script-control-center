@@ -1,4 +1,4 @@
-# Script Control Center
+﻿# Script Control Center
 
 Source for the standalone **Windows script catalog** and an optional combined Fortis/RDG Control Center. The five built-in worker entries point to this stable Windows Git clone. Repo1/Repo2 adapters resolve executable worker/launcher source only from the sibling `%USERPROFILE%\Repos\tunnel` clone, verify its pinned nine-file manifest and fail closed if either clone is missing, dirty, off `main`, or stale. The canonical Tunnel runbook records Windows acceptance; source hashes alone never prove a live reconnect.
 
@@ -136,11 +136,20 @@ The text importer rejects duplicates by path/arguments and never starts code.
 Neither registration nor launch performs any Git Pull/clone, Docker changes,
 Gateway activation, Windows Pull, or service installation.
 
-The stable launcher **remains here** at `Fortis-Windows-Mirror-Status.ps1`.
-It delegates GUI and `-Cli` to the sibling Windows `docke-windows-mirror` clone,
-checks the expected origin, and fails with an explicit instruction if that
-clone is missing. There are no duplicate Mirror UI sources here. No automatic
-Git clone, pull, process restart or service deployment is triggered by the launcher.
+The stable **legacy Script Center entry** path remains
+Fortis-Windows-Mirror-Status.ps1: after the approved Windows source update,
+its default GUI launch now delegates to Fortis-Mirror-Browser.ps1 and the
+one-use loopback session. Explicit -Cli / -Notify still invoke the
+retained legacy reporter with the approved GitHub origin check. Browser UI
+source remains exclusively in the sibling Windows Mirror repository.
+
+For an **already saved** legacy Script Catalog entry, select that record,
+click **«Изменить»**, set **mode window** («Своё окно»), and save. This is
+necessary to see the one-time login URL and any startup error when opening the
+Browser. First bring the approved script-control-center main into the
+separate Windows clone. The stable filename is unchanged: no record
+deletion/import needed. There is **no automatic catalog migration**, Git
+clone/pull, service restart, TLS listener or Gateway activation.
 
 Installation and approved-source delivery belong to the
 [Mirror README](https://github.com/AlexPastukhh/docke-windows-mirror/blob/main/README.md)
