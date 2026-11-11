@@ -994,6 +994,14 @@ namespace FortisRdgControl {
           psi.FileName=shell;psi.Arguments="-NoLogo -NoProfile -ExecutionPolicy Bypass -File "+Quote(System.IO.Path.Combine(launcherRoot,"Script-Runner.ps1"))+" -RunFile "+Quote(request)+" -Token "+Quote(token);
           psi.CreateNoWindow=true;
         }
+        if(e.Mode=="window") {
+          // The catalog can have no visible console of its own. A normal
+          // child process inherits that hidden console, breaking Read-Host.
+          // ShellExecute opens an independent interactive console for -File.
+          psi.UseShellExecute=true;
+          psi.WindowStyle=ProcessWindowStyle.Normal;
+          psi.CreateNoWindow=false;
+        }
         var p=Process.Start(psi);if(p==null)throw new InvalidOperationException("Process.Start failed");
         owned[e.Id]=p;pid[e.Id]=p.Id;launched[e.Id]=p.StartTime;
         var info=new XmlDocument();var node=info.CreateElement("Run");info.AppendChild(node);
