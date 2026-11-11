@@ -6,15 +6,37 @@ TEXT-IMPORT-OWNER-POWERSHELL.txt, then «Проверить» →
 «Импортировать». Mode must be window / «Своё окно».
 Import does not start the executor or configure Gateway.
 
-On first Start, enter absolute paths ONLY to the already provisioned
-Windows server certificate, protected server key, Portal client CA,
-Bearer SECRET FILE (not the bearer contents), and SAME EXISTING SQLite
-receipt DB. The adapter verifies existing local files, writes only paths
-to a protected local owner config
-%LOCALAPPDATA%\Fortis\OwnerShell\script-center-launch.json,
-prints OWNER_SHELL_PATHS_CONFIGURED=YES and exits WITHOUT starting.
-Review the file locally and click Start again to launch the existing
-Mirror-owned Start-OwnerPowerShellExecutor.ps1. Ctrl+C stops the session.
+On first Start, a **visible WinForms setup dialog** opens in the catalog's
+separate PowerShell window. It has five file-path fields and file-browser
+buttons for the already provisioned Windows server certificate, protected
+server key, Portal client CA, Bearer SECRET FILE (not the bearer contents),
+and SAME EXISTING SQLite receipt DB. Known local filenames are suggested
+when they exist; the owner must check the choices before saving. No secret
+contents are requested or displayed. **Cancel** writes nothing.
+
+**Проверить и сохранить** validates all five existing files first, including
+LOCALAPPDATA containment, no reparse points, protected ACL on private files,
+and an existing SQLite header for the receipt DB. Errors appear in a dialog
+without closing the setup form; in particular, `OWNER_SHELL_ACL_serverKey`
+means the key ACL requires separate owner review, not disabling checks.
+On success it writes only the five absolute paths to the ACL-protected
+`%LOCALAPPDATA%\Fortis\OwnerShell\script-center-launch.json` and prints
+`OWNER_SHELL_PATHS_CONFIGURED=YES`, `OWNER_SHELL_STARTED=NO`. No Python
+service is launched by the save operation.
+
+Click Start again: the existing protected paths are loaded and validated
+automatically, then the accepted Mirror-owned
+`Start-OwnerPowerShellExecutor.ps1` runs. No repeated setup or file prompts.
+Ctrl+C stops the running Executor in its console. Fatal preflight errors
+also show a modal error dialog instead of disappearing with a closed console.
+
+To re-open the same setup UI intentionally, run the catalog adapter with
+`-Configure` in its own window (for example, temporarily set the registered
+entry's Arguments to `-Configure`, then restore the empty Arguments after
+setup). Existing paths are prefilled and the config is atomically replaced
+with protected ACL. The saved receipt DB identity **cannot be changed** through
+this convenience UI: a different DB needs an independently reviewed
+owner recovery procedure. Do not create an empty DB or replace secrets here.
 
 The adapter requires a non-admin Windows identity; clean, reviewed
 docke-windows-mirror/main descended from accepted base
