@@ -11,7 +11,8 @@ class OwnerPowerShellAdapterTest(unittest.TestCase):
         self.assertTrue(data.startswith(bytes.fromhex("efbbbf")))
         source=data.decode("utf-8-sig")
         for item in ("#requires -Version 5.1", "OWNER_SHELL_ADMIN_DENIED",
-                     "OWNER_SHELL_SOURCE_SHA_MISMATCH", "OWNER_SHELL_SOURCE_DIRTY",
+                     "OWNER_SHELL_SOURCE_BASE_MISMATCH", "OWNER_SHELL_SOURCE_DIFF_DENIED",
+                     "OWNER_SHELL_SOURCE_BLOB_MISMATCH", "OWNER_SHELL_SOURCE_DIRTY",
                      "OWNER_SHELL_SOURCE_ORIGIN_INVALID", "OWNER_SHELL_PORT_IN_USE",
                      "Assert-PrivateFile", "AreAccessRulesProtected",
                      "OWNER_SHELL_PATHS_CONFIGURED=YES", "OWNER_SHELL_STARTED=NO",
@@ -24,6 +25,16 @@ class OwnerPowerShellAdapterTest(unittest.TestCase):
                        "Manage-Integrations.ps1", "docker volume", "catalog.xml"):
             with self.subTest(denied=denied):
                 self.assertNotIn(denied,source)
+
+    def test_docs_only_mirror_upgrade_does_not_relax_runtime_pin(self):
+        source=(ROOT/"Fortis-Owner-PowerShell-Executor.ps1").read_text("utf-8-sig")
+        self.assertIn("merge-base --is-ancestor $approvedBase $sha",source)
+        self.assertIn("diff --name-only --no-ext-diff $approvedBase $sha",source)
+        self.assertIn("$_ -cne 'docs/GATEWAY-READ-ONLY.md'",source)
+        self.assertIn("'Start-OwnerPowerShellExecutor.ps1' = '36798dbc1c48829eb395b08128618ac3c8962b57'",source)
+        self.assertIn("'mirror_api' = '390ad3cd7938364a5861cb9d3ef707f31d7037b9'",source)
+        self.assertIn("OWNER_SHELL_SOURCE_DIRTY",source)
+        self.assertIn("OWNER_SHELL_SOURCE_ORIGIN_INVALID",source)
 
     def test_manual_registration(self):
         content=(ROOT/"TEXT-IMPORT-OWNER-POWERSHELL.txt").read_bytes()
