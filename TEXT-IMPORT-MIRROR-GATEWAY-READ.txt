@@ -1,0 +1,4 @@
+﻿# Optional owner import in Script Center → Импорт из текста → Проверить → Импортировать.
+# This is a DIFFERENT API from Mirror Browser; own window, HTTPS 443, GET-only.
+# Import does not start anything. First Start configures existing file paths only.
+Fortis Mirror — Gateway READ HTTPS | @app\Fortis-Mirror-Gateway-Read.ps1 | window
