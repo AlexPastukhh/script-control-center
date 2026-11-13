@@ -25,6 +25,14 @@ Fortis-Windows-Mirror-Status.ps1 теперь по умолчанию откры
 не происходит из Git и не запускает скрипт. `-OpenBrowser` открывает локальный
 read-only UI, без fetch/pull/сервисов/активации Gateway.
 
+**Mirror Gateway HTTPS READ:** отдельная ручная запись `window` из
+`TEXT-IMPORT-MIRROR-GATEWAY-READ.txt` ведёт в тонкий
+`Fortis-Mirror-Gateway-Read.ps1`. Первое нажатие сохраняет только пути к
+существующим защищённым файлам, не запускает listener. Следующее нажатие
+проверяет точный Mirror source/ACL и стартует штатный GET-only HTTPS/443 в
+видимом окне; `-Status` не делает сетевой запрос. Это не Browser Pull,
+Windows service, credential provisioning или Gateway Apply.
+
 **Gitleaks:** отдельная ручная запись `window` из
 `TEXT-IMPORT-GITLEAKS.txt` → `Start-GitleaksScanner.cmd`, не в preset.
 `cmd` не ослабляет PowerShell Execution Policy. Подробности офлайн-сканирования,
