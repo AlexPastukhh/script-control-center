@@ -14,11 +14,20 @@ using System.Threading;
 namespace FortisRdgControl {
   public sealed class RegisteredScript {
     public string Id, BundleId, Name, Path, Arguments, WorkingDirectory, Mode, LogPath, Token;
+    public override string ToString() { return Name; }
+  }
+  public sealed class ScriptProfile {
+    public string Id, Name;
+    public readonly List<string> ScriptIds = new List<string>();
+    public override string ToString() { return Name; }
   }
   public sealed class ScriptCatalogForm : Form {
     private readonly string launcherRoot;
     private readonly string dataRoot;
     private readonly string catalogPath;
+    private readonly string profilesPath;
+    private readonly List<ScriptProfile> profiles = new List<ScriptProfile>();
+    private string profilesWarning = "";
     private readonly string shell;
     private readonly List<RegisteredScript> entries = new List<RegisteredScript>();
     private readonly ListView items = new ListView();
@@ -67,6 +76,7 @@ namespace FortisRdgControl {
       shell = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), @"WindowsPowerShell\v1.0\powershell.exe");
       dataRoot = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FortisRdgControlCenter", "scripts");
       catalogPath = System.IO.Path.Combine(dataRoot, "catalog.xml");
+      profilesPath = System.IO.Path.Combine(dataRoot, "profiles.xml");
       Text = "Control Center — пользовательские скрипты";
       Size = new Size(1280, 760); MinimumSize = new Size(960, 620); StartPosition = FormStartPosition.CenterScreen;
       Font = new Font("Segoe UI", 9.5f); BackColor = Color.FromArgb(13,21,35); ForeColor = Color.FromArgb(232,240,250);
@@ -81,6 +91,7 @@ namespace FortisRdgControl {
       AddButton(top, "＋ Добавить", delegate { AddEntry(); }, 126, true);
       AddButton(top, "Импорт из текста", delegate { ImportFromText(); }, 168, true);
       AddButton(top, "Готовый набор", delegate { ImportBuiltInBundle(); }, 140, false);
+      AddButton(top, "Профили", delegate { ManageProfiles(); }, 112, true);
       AddButton(top, "Изменить", delegate { EditEntry(); }, 112, false);
       AddButton(top, "Удалить", delegate { DeleteEntry(); }, 100, false);
       AddButton(top, "▶ Запустить", delegate { StartEntry(); }, 118, true);
@@ -139,7 +150,7 @@ namespace FortisRdgControl {
         int maxLeft=split.ClientSize.Width-split.Panel2MinSize-split.SplitterWidth;
         if(maxLeft>=split.Panel1MinSize) split.SplitterDistance=Math.Max(split.Panel1MinSize,Math.Min(390,maxLeft));
       };
-      LoadEntries(); RefreshItems();
+      LoadEntries(); LoadProfiles(); RefreshItems();
       tick.Interval=1200; tick.Tick += delegate { RefreshStatuses(); }; tick.Start();
       FormClosing += delegate { tick.Stop(); }; // user scripts are independent of the UI
     }
@@ -205,6 +216,207 @@ namespace FortisRdgControl {
         error=ex.Message;
         return false;
       }
+    }
+    // Profiles are references to catalog registrations, not copied commands.
+    // Persist separately so editing a profile never rewrites the catalog.
+    private void LoadProfiles() {
+      if(!File.Exists(profilesPath))return;
+      string problem="";
+      if(TryLoadProfiles(profilesPath,out problem))return;
+      string[] backups=new string[0];
+      try {
+        backups=Directory.GetFiles(dataRoot,"profiles.xml.*.bak");
+        Array.Sort(backups,delegate(string a,string b) {
+          return File.GetLastWriteTimeUtc(b).CompareTo(File.GetLastWriteTimeUtc(a));
+        });
+      }catch { }
+      foreach(string backup in backups) {
+        string error="";
+        if(TryLoadProfiles(backup,out error)) {
+          profilesWarning="Основной файл профилей повреждён; загружена резервная копия "+Path.GetFileName(backup)+". Сохраните профили для восстановления.";
+          return;
+        }
+      }
+      profilesWarning="Не удалось загрузить профили: "+problem+". Файл сохранён без изменений.";
+    }
+    private bool TryLoadProfiles(string path,out string error) {
+      error="";
+      var loaded=new List<ScriptProfile>();
+      try {
+        var settings=new XmlReaderSettings { DtdProcessing=DtdProcessing.Prohibit, XmlResolver=null };
+        using(var reader=XmlReader.Create(path,settings)) {
+          var xml=new XmlDocument { XmlResolver=null };xml.Load(reader);
+          if(xml.DocumentElement==null || xml.DocumentElement.Name!="Profiles" ||
+             Attr(xml.DocumentElement,"version")!="1")throw new InvalidDataException("Неподдерживаемый формат профилей.");
+          var ids=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+          var names=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+          foreach(XmlNode node in xml.DocumentElement.ChildNodes) {
+            if(node.NodeType!=XmlNodeType.Element || node.Name!="Profile")throw new InvalidDataException("Неожиданный элемент профиля.");
+            string id=Attr(node,"id"),name=Attr(node,"name");
+            Guid parsed;
+            if(!Guid.TryParse(id,out parsed) || String.IsNullOrWhiteSpace(name) || name.Length>80 ||
+               !ids.Add(id) || !names.Add(name.Trim()) || loaded.Count>=100)
+              throw new InvalidDataException("Некорректный или повторяющийся профиль.");
+            var profile=new ScriptProfile { Id=id,Name=name.Trim() };
+            foreach(XmlNode child in node.ChildNodes) {
+              if(child.NodeType!=XmlNodeType.Element || child.Name!="Script")throw new InvalidDataException("Некорректный состав профиля.");
+              string scriptId=Attr(child,"id");
+              if(!Guid.TryParse(scriptId,out parsed) || profile.ScriptIds.Count>=200 ||
+                 profile.ScriptIds.Exists(delegate(string x) { return String.Equals(x,scriptId,StringComparison.OrdinalIgnoreCase); }))
+                throw new InvalidDataException("Некорректная ссылка на скрипт в профиле.");
+              profile.ScriptIds.Add(scriptId);
+            }
+            loaded.Add(profile);
+          }
+        }
+        profiles.Clear();profiles.AddRange(loaded);return true;
+      } catch(Exception ex) { error=ex.Message;return false; }
+    }
+    private void SaveProfiles() {
+      // Never silently replace a damaged primary file when no valid backup was loaded.
+      if(profilesWarning.StartsWith("Не удалось загрузить профили:"))
+        throw new InvalidDataException(profilesWarning);
+      Directory.CreateDirectory(dataRoot);
+      var xml=new XmlDocument();var root=xml.CreateElement("Profiles");xml.AppendChild(root);
+      SetAttr(xml,root,"version","1");
+      foreach(ScriptProfile profile in profiles) {
+        var node=xml.CreateElement("Profile");root.AppendChild(node);
+        SetAttr(xml,node,"id",profile.Id);SetAttr(xml,node,"name",profile.Name);
+        foreach(string scriptId in profile.ScriptIds) {
+          var child=xml.CreateElement("Script");node.AppendChild(child);SetAttr(xml,child,"id",scriptId);
+        }
+      }
+      string temp=profilesPath+"."+Guid.NewGuid().ToString("N")+".tmp";
+      string backup=profilesPath+"."+Guid.NewGuid().ToString("N")+".bak";
+      try {
+        using(var writer=XmlWriter.Create(temp,new XmlWriterSettings { Indent=true,Encoding=new UTF8Encoding(false) }))xml.Save(writer);
+        if(File.Exists(profilesPath))File.Replace(temp,profilesPath,backup);
+        else File.Move(temp,profilesPath);
+        string[] backups=Directory.GetFiles(dataRoot,"profiles.xml.*.bak");
+        Array.Sort(backups,delegate(string a,string b) { return File.GetLastWriteTimeUtc(b).CompareTo(File.GetLastWriteTimeUtc(a)); });
+        for(int i=5;i<backups.Length;i++) { try { File.Delete(backups[i]); }catch { } }
+        profilesWarning="";
+      } finally { if(File.Exists(temp))File.Delete(temp); }
+    }
+    private static string AskProfileName(Form owner,string title,string current) {
+      using(var dialog=new Form { Text=title,Size=new Size(440,175),FormBorderStyle=FormBorderStyle.FixedDialog,
+        MaximizeBox=false,MinimizeBox=false,StartPosition=FormStartPosition.CenterParent,Font=new Font("Segoe UI",9.5f) }) {
+        var input=new TextBox { Left=15,Top=18,Width=390,Text=current??"" };
+        var ok=new Button { Text="OK",Left=212,Top=62,Width=90,DialogResult=DialogResult.OK };
+        var cancel=new Button { Text="Отмена",Left=311,Top=62,Width=94,DialogResult=DialogResult.Cancel };
+        dialog.Controls.Add(input);dialog.Controls.Add(ok);dialog.Controls.Add(cancel);
+        dialog.AcceptButton=ok;dialog.CancelButton=cancel;
+        if(dialog.ShowDialog(owner)!=DialogResult.OK)return null;
+        string name=input.Text.Trim();
+        if(name.Length==0 || name.Length>80) {
+          MessageBox.Show(owner,"Название должно содержать от 1 до 80 символов.");return null;
+        }
+        return name;
+      }
+    }
+    private void ManageProfiles() {
+      using(var dialog=new Form { Text="Профили скриптов",Size=new Size(850,630),MinimumSize=new Size(760,560),
+        StartPosition=FormStartPosition.CenterParent,Font=new Font("Segoe UI",9.5f) }) {
+        var list=new ListBox { Left=14,Top=50,Width=270,Height=385,Anchor=AnchorStyles.Left|AnchorStyles.Top|AnchorStyles.Bottom };
+        var scripts=new CheckedListBox { Left=300,Top=50,Width=520,Height=385,CheckOnClick=true,
+          Anchor=AnchorStyles.Top|AnchorStyles.Left|AnchorStyles.Right|AnchorStyles.Bottom,IntegralHeight=false };
+        var info=new Label { Left=14,Top=444,Width=805,Height=48,Anchor=AnchorStyles.Left|AnchorStyles.Right|AnchorStyles.Bottom,
+          Text="Выберите профиль. Состав сохраняется отдельно от каталога; отсутствующие регистрации не запускаются." };
+        var newButton=new Button { Text="Новый",Left=14,Top=506,Width=100,Anchor=AnchorStyles.Left|AnchorStyles.Bottom };
+        var rename=new Button { Text="Переименовать",Left=121,Top=506,Width=138,Anchor=AnchorStyles.Left|AnchorStyles.Bottom };
+        var remove=new Button { Text="Удалить",Left=14,Top=538,Width=100,Anchor=AnchorStyles.Left|AnchorStyles.Bottom };
+        var save=new Button { Text="Сохранить состав",Left=300,Top=506,Width=153,Anchor=AnchorStyles.Left|AnchorStyles.Bottom };
+        var start=new Button { Text="▶ Запустить профиль",Left=464,Top=506,Width=165,Anchor=AnchorStyles.Left|AnchorStyles.Bottom };
+        var stop=new Button { Text="■ Остановить профиль",Left=638,Top=506,Width=175,Anchor=AnchorStyles.Left|AnchorStyles.Bottom };
+        dialog.Controls.Add(new Label { Left=14,Top=17,Width=270,Text="ПРОФИЛИ" });
+        dialog.Controls.Add(new Label { Left=300,Top=17,Width=500,Text="ЗАРЕГИСТРИРОВАННЫЕ СКРИПТЫ" });
+        dialog.Controls.Add(list);dialog.Controls.Add(scripts);dialog.Controls.Add(info);
+        foreach(Control button in new Control[]{newButton,rename,remove,save,start,stop})dialog.Controls.Add(button);
+        Action refresh=delegate {
+          string previous=(list.SelectedItem as ScriptProfile)==null?null:((ScriptProfile)list.SelectedItem).Id;
+          list.Items.Clear();foreach(ScriptProfile p in profiles)list.Items.Add(p);
+          if(list.Items.Count>0) {
+            int selected=0;
+            for(int i=0;i<list.Items.Count;i++)if(((ScriptProfile)list.Items[i]).Id==previous)selected=i;
+            list.SelectedIndex=selected;
+          }
+        };
+        list.SelectedIndexChanged += delegate {
+          scripts.Items.Clear();var selected=list.SelectedItem as ScriptProfile;
+          scripts.Enabled=selected!=null;
+          foreach(RegisteredScript entry in entries)
+            scripts.Items.Add(entry,selected!=null && selected.ScriptIds.Exists(delegate(string id) { return String.Equals(id,entry.Id,StringComparison.OrdinalIgnoreCase); }));
+          // CheckedListBox displays a registered entry's name, not its object type.
+          int missing=selected==null?0:selected.ScriptIds.Count-idCount(selected.ScriptIds);
+          info.Text=selected==null?"Создайте профиль для выбора скриптов.":
+            "Скриптов в профиле: "+selected.ScriptIds.Count+"; отсутствующих регистраций: "+missing+
+            ". Сначала нажмите «Сохранить состав», затем запустите или остановите профиль.";
+        };
+        newButton.Click += delegate {
+          if(profiles.Count>=100) { MessageBox.Show(dialog,"Максимум 100 профилей.");return; }
+          string name=AskProfileName(dialog,"Новый профиль","");if(name==null)return;
+          if(profiles.Exists(delegate(ScriptProfile p) { return String.Equals(p.Name,name,StringComparison.OrdinalIgnoreCase); })) {
+            MessageBox.Show(dialog,"Профиль с таким именем уже есть.");return;
+          }
+          var added=new ScriptProfile { Id=Guid.NewGuid().ToString("D"),Name=name };
+          profiles.Add(added);
+          try { SaveProfiles();refresh();list.SelectedItem=added; }
+          catch(Exception ex) { profiles.Remove(added);MessageBox.Show(dialog,ex.Message); }
+        };
+        rename.Click += delegate {
+          var selected=list.SelectedItem as ScriptProfile;if(selected==null)return;
+          string name=AskProfileName(dialog,"Переименовать профиль",selected.Name);if(name==null)return;
+          if(profiles.Exists(delegate(ScriptProfile p) { return p!=selected && String.Equals(p.Name,name,StringComparison.OrdinalIgnoreCase); })) {
+            MessageBox.Show(dialog,"Такое имя уже используется.");return;
+          }
+          string old=selected.Name;selected.Name=name;
+          try { SaveProfiles();refresh(); }catch(Exception ex) { selected.Name=old;MessageBox.Show(dialog,ex.Message); }
+        };
+        remove.Click += delegate {
+          var selected=list.SelectedItem as ScriptProfile;if(selected==null)return;
+          if(MessageBox.Show(dialog,"Удалить профиль «"+selected.Name+"»? Скрипты и процессы не затрагиваются.",
+            "Удалить профиль",MessageBoxButtons.YesNo,MessageBoxIcon.Warning)!=DialogResult.Yes)return;
+          int index=profiles.IndexOf(selected);profiles.RemoveAt(index);
+          try { SaveProfiles();refresh(); }catch(Exception ex) { profiles.Insert(index,selected);MessageBox.Show(dialog,ex.Message); }
+        };
+        save.Click += delegate {
+          var selected=list.SelectedItem as ScriptProfile;if(selected==null)return;
+          var original=new List<string>(selected.ScriptIds);
+          selected.ScriptIds.Clear();
+          foreach(RegisteredScript entry in scripts.CheckedItems)selected.ScriptIds.Add(entry.Id);
+          try { SaveProfiles();list.SelectedIndex=-1;list.SelectedItem=selected; }
+          catch(Exception ex) { selected.ScriptIds.Clear();selected.ScriptIds.AddRange(original);MessageBox.Show(dialog,ex.Message); }
+        };
+        start.Click += delegate { RunProfile(list.SelectedItem as ScriptProfile,true,dialog); };
+        stop.Click += delegate { RunProfile(list.SelectedItem as ScriptProfile,false,dialog); };
+        refresh();
+        if(profilesWarning.Length>0)MessageBox.Show(dialog,profilesWarning,"Профили",MessageBoxButtons.OK,MessageBoxIcon.Warning);
+        dialog.ShowDialog(this);
+      }
+    }
+    private int idCount(List<string> ids) {
+      int count=0;
+      foreach(string id in ids)if(entries.Exists(delegate(RegisteredScript e) { return String.Equals(e.Id,id,StringComparison.OrdinalIgnoreCase); }))count++;
+      return count;
+    }
+    private void RunProfile(ScriptProfile profile,bool launching,Form dialog) {
+      if(profile==null)return;
+      if(profile.ScriptIds.Count==0) { MessageBox.Show(dialog,"В профиле нет скриптов.");return; }
+      string action=launching?"Запустить":"Остановить";
+      string description=launching?"Уже запущенные будут пропущены. Скрипты выполняются с вашими правами Windows.":
+        "Уже остановленные будут пропущены. Управляемые процессы могут завершиться вместе с дочерними. Внешние PowerShell-процессы останавливаются только по проверенному PID, без дерева.";
+      if(MessageBox.Show(dialog,action+" профиль «"+profile.Name+"» ("+profile.ScriptIds.Count+" записей)?\n\n"+description,
+        "Подтверждение профиля",MessageBoxButtons.YesNo,MessageBoxIcon.Warning,MessageBoxDefaultButton.Button2)!=DialogResult.Yes)return;
+      var report=new List<string>();
+      foreach(string id in new List<string>(profile.ScriptIds)) {
+        RegisteredScript entry=entries.Find(delegate(RegisteredScript e) { return String.Equals(e.Id,id,StringComparison.OrdinalIgnoreCase); });
+        if(entry==null) { report.Add("ПРОПУЩЕН: регистрация отсутствует ("+id+")");continue; }
+        if(launching)StartEntry(entry,true,report);
+        else StopEntry(entry,true,report);
+      }
+      RefreshStatuses();
+      MessageBox.Show(dialog,String.Join("\n",report.ToArray()),"Профиль «"+profile.Name+"»: результат",
+        MessageBoxButtons.OK,MessageBoxIcon.Information);
     }
     private static string Attr(XmlNode n,string key) { var a=n.Attributes[key]; return a==null?"":a.Value; }
     private void SaveEntries() {
@@ -951,32 +1163,36 @@ namespace FortisRdgControl {
         if(killer.ExitCode!=0) throw new InvalidOperationException("taskkill завершился с кодом "+killer.ExitCode+".");
       }
     }
-    private void StartEntry() {
-      var e=Current;if(e==null)return;
+    private void StartEntry() { StartEntry(null,false,null); }
+    private void StartEntry(RegisteredScript selected,bool fromProfile,List<string> profileReport) {
+      var e=selected??Current;if(e==null)return;
       string problem=EntryProblem(e);
       if(problem!=null) {
-        MessageBox.Show(this,"Эту запись нельзя запустить.\n\n"+problem+"\n\nИсправьте её через кнопку «Изменить».","Неверная настройка",MessageBoxButtons.OK,MessageBoxIcon.Warning);
+        if(fromProfile)profileReport.Add("ОШИБКА: "+e.Name+" — "+problem);
+        else MessageBox.Show(this,"Эту запись нельзя запустить.\n\n"+problem+"\n\nИсправьте её через кнопку «Изменить».","Неверная настройка",MessageBoxButtons.OK,MessageBoxIcon.Warning);
         return;
       }
-      if(IsLive(e)) { MessageBox.Show("Этот процесс уже запущен. Повторный запуск отменён.");return; }
+      if(IsLive(e)) { if(fromProfile)profileReport.Add("ПРОПУЩЕН (работает): "+e.Name);else MessageBox.Show("Этот процесс уже запущен. Повторный запуск отменён.");return; }
       // Never start a second copy when the same script was launched manually.
       // Re-check synchronously: the last background WMI snapshot may be stale.
       try {
         var matches=ScanExternalRuns(new List<RegisteredScript>{e});
         ExternalRun found;
         if(matches.TryGetValue(e.Id,out found)) {
-          MessageBox.Show(this, found.Ambiguous?
+          if(fromProfile)profileReport.Add("ПРОПУЩЕН (внешний запуск): "+e.Name+(found.Ambiguous?" — несколько процессов":" — PID "+found.Pid));
+          else MessageBox.Show(this, found.Ambiguous?
             "Найдено несколько внешних запусков. Новый запуск отменён.":
             "Скрипт уже запущен вне центра (PID "+found.Pid+"). Новый запуск отменён.",
             "Внешний процесс",MessageBoxButtons.OK,MessageBoxIcon.Information);
           return;
         }
       } catch(Exception ex) {
-        MessageBox.Show(this,"Не удалось проверить внешние запуски. Запуск отменён: "+ex.Message,
+        if(fromProfile)profileReport.Add("ОШИБКА: "+e.Name+" — проверка внешних процессов: "+ex.Message);
+        else MessageBox.Show(this,"Не удалось проверить внешние запуски. Запуск отменён: "+ex.Message,
           "Проверка процесса",MessageBoxButtons.OK,MessageBoxIcon.Warning);
         return;
       }
-      if(MessageBox.Show(this,"Запустить «"+e.Name+"»?\n"+e.Path+"\n\nСкрипт будет выполняться с вашими правами Windows.","Подтверждение",MessageBoxButtons.YesNo,MessageBoxIcon.Warning,MessageBoxDefaultButton.Button2)!=DialogResult.Yes)return;
+      if(!fromProfile && MessageBox.Show(this,"Запустить «"+e.Name+"»?\n"+e.Path+"\n\nСкрипт будет выполняться с вашими правами Windows.","Подтверждение",MessageBoxButtons.YesNo,MessageBoxIcon.Warning,MessageBoxDefaultButton.Button2)!=DialogResult.Yes)return;
       try {
         string args,exe=Interpreter(e,out args);
         Directory.CreateDirectory(System.IO.Path.Combine(dataRoot,"logs"));
@@ -1008,19 +1224,36 @@ namespace FortisRdgControl {
         node.SetAttribute("pid",p.Id.ToString());node.SetAttribute("start",p.StartTime.ToBinary().ToString());
         node.SetAttribute("mode",e.Mode);node.SetAttribute("token",runToken);
         info.Save(StatePath(e));RefreshStatuses();
-      }catch(Exception ex){MessageBox.Show("Ошибка запуска: "+ex.Message);}
+        if(fromProfile)profileReport.Add("ЗАПУЩЕН: "+e.Name+" (PID "+p.Id+")");
+      }catch(Exception ex){if(fromProfile)profileReport.Add("ОШИБКА: "+e.Name+" — "+ex.Message);else MessageBox.Show("Ошибка запуска: "+ex.Message);}
     }
-    private void StopEntry() {
-      var e=Current;if(e==null)return;
+    private void StopEntry() { StopEntry(null,false,null); }
+    private void StopEntry(RegisteredScript selected,bool fromProfile,List<string> profileReport) {
+      var e=selected??Current;if(e==null)return;
       if(!IsLive(e)) {
         ExternalRun visible;
+        if(fromProfile) {
+          // The periodic background result may be stale or unavailable.
+          // Read this one registration afresh; never mistake scan failure for stopped.
+          try {
+            var fresh=ScanExternalRuns(new List<RegisteredScript>{e});
+            externalRuns.Remove(e.Id);
+            if(fresh.TryGetValue(e.Id,out visible))externalRuns[e.Id]=visible;
+            externalScanReady=true;
+          }catch(Exception ex) {
+            profileReport.Add("ОШИБКА (невозможно проверить): "+e.Name+" — "+ex.Message);
+            return;
+          }
+        }
         if(!externalRuns.TryGetValue(e.Id,out visible) || !externalScanReady) {
-          MessageBox.Show(this,"Подтверждённый процесс не обнаружен. Для внешних запусков поддерживается прямой запуск PowerShell через -File с абсолютным путём .ps1.",
+          if(fromProfile)profileReport.Add((externalScanReady?"ПРОПУЩЕН (остановлен): ":"ОШИБКА (не проверен): ")+e.Name);
+          else MessageBox.Show(this,"Подтверждённый процесс не обнаружен. Для внешних запусков поддерживается прямой запуск PowerShell через -File с абсолютным путём .ps1.",
             "Нет подтверждённого процесса",MessageBoxButtons.OK,MessageBoxIcon.Information);
           return;
         }
         if(visible.Ambiguous) {
-          MessageBox.Show(this,"Найдено несколько внешних процессов с этим файлом. Остановка заблокирована — нельзя однозначно выбрать PID.",
+          if(fromProfile)profileReport.Add("ОШИБКА (несколько внешних): "+e.Name);
+          else MessageBox.Show(this,"Найдено несколько внешних процессов с этим файлом. Остановка заблокирована — нельзя однозначно выбрать PID.",
             "Неоднозначный запуск",MessageBoxButtons.OK,MessageBoxIcon.Warning);
           return;
         }
@@ -1035,7 +1268,7 @@ namespace FortisRdgControl {
             "\nВремя старта: "+verified.Started.ToString("yyyy-MM-dd HH:mm:ss")+
             "\n\nКонтрольный центр не запускал этот процесс. Дочерние процессы НЕ будут завершены. " +
             "Несохранённые данные внешнего скрипта могут быть потеряны. Продолжить?";
-          if(MessageBox.Show(this,question,"Подтвердить внешнюю остановку",
+          if(!fromProfile && MessageBox.Show(this,question,"Подтвердить внешнюю остановку",
             MessageBoxButtons.YesNo,MessageBoxIcon.Warning,MessageBoxDefaultButton.Button2)!=DialogResult.Yes)
             return;
           matches=ScanExternalRuns(snapshot);
@@ -1047,18 +1280,22 @@ namespace FortisRdgControl {
                Math.Abs((p.StartTime-final.Started).TotalSeconds)>=1)
               throw new InvalidOperationException("PID или время старта изменились. Остановка отменена.");
             p.Kill(); // Exact verified external PowerShell PID only; never taskkill /T.
+            if(fromProfile)profileReport.Add("ОСТАНОВЛЕН ВНЕШНИЙ: "+e.Name+" (PID "+final.Pid+")");
           }
           externalRuns.Remove(e.Id);
           externalScanReady=false;
           lastExternalCheckUtc=DateTime.MinValue;
           RefreshStatuses();
         } catch(Exception ex) {
-          MessageBox.Show(this,"Внешний процесс не остановлен: "+ex.Message,
+          if(fromProfile)profileReport.Add("ОШИБКА: "+e.Name+" — "+ex.Message);
+          else MessageBox.Show(this,"Внешний процесс не остановлен: "+ex.Message,
             "Ошибка остановки",MessageBoxButtons.OK,MessageBoxIcon.Warning);
         }
         return;
       }
-      if(MessageBox.Show("Завершить запущенный из центра процесс «"+e.Name+"» и его дерево дочерних процессов?\nОтсоединённые или повышенные процессы могут пережить остановку.","Подтверждение остановки",MessageBoxButtons.YesNo,MessageBoxIcon.Warning,MessageBoxDefaultButton.Button2)!=DialogResult.Yes)return;
+      if(!fromProfile) {
+        if(MessageBox.Show("Завершить запущенный из центра процесс «"+e.Name+"» и его дерево дочерних процессов?\nОтсоединённые или повышенные процессы могут пережить остановку.","Подтверждение остановки",MessageBoxButtons.YesNo,MessageBoxIcon.Warning,MessageBoxDefaultButton.Button2)!=DialogResult.Yes)return;
+      }
       try {
         if(!IsLive(e))throw new InvalidOperationException("Процесс уже завершился");
         if(e.Mode=="hidden") {
@@ -1069,11 +1306,13 @@ namespace FortisRdgControl {
           if(!Guid.TryParse(token,out parsed)) throw new InvalidOperationException("Нет подтверждённого токена запуска.");
           string marker=System.IO.Path.Combine(dataRoot,"runs",e.Id+"-"+token+".stop");
           File.WriteAllText(marker,"stop",new UTF8Encoding(false));
+          if(fromProfile)profileReport.Add("ОСТАНОВКА ЗАПРОШЕНА: "+e.Name);
         } else {
           // Kill only the exact PID whose start time was verified by IsLive, including its child tree.
           KillProcessTree(pid[e.Id]);
+          if(fromProfile)profileReport.Add("ОСТАНОВЛЕН: "+e.Name);
         }
-      }catch(Exception ex){MessageBox.Show(ex.Message);}
+      }catch(Exception ex){if(fromProfile)profileReport.Add("ОШИБКА: "+e.Name+" — "+ex.Message);else MessageBox.Show(ex.Message);}
       RefreshStatuses();
     }
     private void OpenLog() {
