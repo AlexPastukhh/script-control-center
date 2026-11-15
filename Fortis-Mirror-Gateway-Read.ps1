@@ -8,7 +8,7 @@ No Git update, credential creation, service install, Docker writes or firewall c
 param([switch]$Status)
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
-$pin = 'efa353791e1cd79ef5d0122019ffb982e21cab4e'
+$pin = 'c0f5db887f29996ee3464cf991674c31d0a22eaf'
 $configPath = Join-Path $env:LOCALAPPDATA 'Fortis\MirrorRead\script-center-paths.json'
 
 function Assert-LocalFile {
@@ -59,6 +59,21 @@ function Get-MirrorLauncher {
     if ($LASTEXITCODE -ne 0 -or $branch -cne 'main') { throw 'MIRROR_BRANCH_CHANGED' }
     $sha = (& $git -C $root rev-parse HEAD | Out-String).Trim()
     if ($LASTEXITCODE -ne 0 -or $sha -cne $pin) { throw 'MIRROR_SOURCE_PIN_CHANGED' }
+    # The GET-only listener imports mirror_api.operations, which changed in
+    # Mirror PR #19-22. Require the exact reviewed source objects, not a
+    # movable branch or merely a matching launcher filename.
+    $runtimeBlobs = [ordered]@{
+        'Start-MirrorGatewayReadOnly.ps1' = '368db7bb6ac4b64d6ecff0fda76a62ae3ff5779c'
+        'mirror_api/__init__.py' = '9cebe46e8c113d55d1aca036cca594a2f2853b56'
+        'mirror_api/gateway_readonly.py' = '93c61da0270f1d5d6fe97ba36a34579c403332d9'
+        'mirror_api/operations.py' = '43d752412c8102a92c0804aa254623ce230347a9'
+    }
+    foreach ($rel in $runtimeBlobs.Keys) {
+        $actual = (& $git -C $root rev-parse --verify ('HEAD:' + $rel) | Out-String).Trim()
+        if ($LASTEXITCODE -ne 0 -or $actual -cne $runtimeBlobs[$rel]) {
+            throw 'MIRROR_RUNTIME_BLOB_MISMATCH'
+        }
+    }
     $dirty = @(& $git -C $root status --porcelain=v1 --untracked-files=all)
     if ($LASTEXITCODE -ne 0 -or $dirty.Count -ne 0) { throw 'MIRROR_SOURCE_DIRTY' }
     $origin = (& $git -C $root remote get-url origin | Out-String).Trim()

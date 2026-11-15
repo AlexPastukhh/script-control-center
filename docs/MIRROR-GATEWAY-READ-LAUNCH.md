@@ -1,8 +1,14 @@
 # Windows Mirror GET-only HTTPS — opt-in Script Center
 
 Owner-only convenience adapter. Requires an independently accepted, clean Windows
-docke-windows-mirror main, pinned here to \`efa353791e1cd79ef5d0122019ffb982e21cab4e\`.
+docke-windows-mirror main, pinned here to \`c0f5db887f29996ee3464cf991674c31d0a22eaf\`.
 Newer Mirror source requires a reviewed source-pin update, never bypass.
+This pin covers Mirror PR #19–22. Although the listener itself did not change,
+its imported `mirror_api/operations.py` did. The adapter therefore also verifies
+Git blob IDs for the launcher, package initializer, listener and operations
+module. The listener still only allows GET and invokes
+`Mirror.inventory(remote=False, repo=...)`: no GitHub read, Windows fetch or
+browser Pull. Source-only tests are not a Windows/TLS live acceptance.
 
 Use Script Center → «Импорт из текста» and paste the one non-comment line from
 \`TEXT-IMPORT-MIRROR-GATEWAY-READ.txt\`. Mode must be \`window\` / «Своё окно».

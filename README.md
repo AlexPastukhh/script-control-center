@@ -180,6 +180,21 @@ and [Windows sync UC](https://github.com/AlexPastukhh/docke-windows-mirror/blob/
 This repo owns only the thin compatibility launcher; it does not perform clone,
 pull or deployment as a side effect of launching it.
 
+## Optional Mirror listener adapters and reviewed source pin
+
+`Fortis-Owner-PowerShell-Executor.ps1` and `Fortis-Mirror-Gateway-Read.ps1`
+are manually registered, independent `window` entries, not part of the normal
+Mirror Browser. Both require the **exact reviewed** clean Windows Mirror
+`main` commit `c0f5db887f29996ee3464cf991674c31d0a22eaf`.
+The Owner Executor separately pins its unchanged PowerShell launcher and
+Python owner-shell module; Gateway READ pins its listener **and** changed
+read-only observation module. Later Mirror commits must be reviewed and pinned
+explicitly. Neither adapter installs a listener or performs Git updates as
+part of registration; the source update alone does not activate either one.
+See [Executor](docs/OWNER-POWERSHELL-EXECUTOR-LAUNCH.md) and
+[Gateway READ](docs/MIRROR-GATEWAY-READ-LAUNCH.md) for required credentials,
+owner-only setup and runtime restrictions.
+
 ## Requirements and verification
 
 The UI requires **Windows PowerShell 5.1, Windows Forms and an STA thread**. It is not a Linux-native application. The existing Docker workspace can edit the source and run the static Python regression tests, but it cannot verify real WinForms compilation or GUI behavior.

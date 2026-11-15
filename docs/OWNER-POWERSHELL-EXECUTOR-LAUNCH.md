@@ -38,22 +38,28 @@ with protected ACL. The saved receipt DB identity **cannot be changed** through
 this convenience UI: a different DB needs an independently reviewed
 owner recovery procedure. Do not create an empty DB or replace secrets here.
 
-The adapter requires a non-admin Windows identity; clean, reviewed
-docke-windows-mirror/main descended from accepted base
-a5cb3e9f61e68331c11337eb5da4af056d27660c.
-Compared to that base, the ONLY allowed changed source path is
-docs/GATEWAY-READ-ONLY.md. The accepted Git blob for
-Start-OwnerPowerShellExecutor.ps1 and accepted Git tree for all
-mirror_api runtime sources remain pinned by exact object IDs.
-Any other changed path, runtime module, executable launcher or
-unrecognized history fails closed. This allows the separately reviewed
-Mirror READ runbook-only PR #18 without weakening executor-code identity.
-A future code change requires a new source review and explicit updated
-object pins. The adapter still requires an approved Git origin; protected
-key, Bearer, config and receipt DB ACL; and unoccupied port 10443.
-It binds ONLY 127.0.0.1:10443, not an external network interface.
-It does no Git update, Docker change, Gateway release, service
-installation or firewall change.
+The adapter requires a non-admin Windows identity and the **exact clean**
+`docke-windows-mirror/main` commit
+`c0f5db887f29996ee3464cf991674c31d0a22eaf`, descended from the
+accepted base `a5cb3e9f61e68331c11337eb5da4af056d27660c`.
+
+Mirror PR #19–22 modified Browser and `mirror_api/operations.py`, so the old
+"only docs/GATEWAY-READ-ONLY.md changed since base" restriction rejects the
+current clean Mirror source. In the reviewed current commit the Owner Shell
+execution code is unchanged: `Start-OwnerPowerShellExecutor.ps1`,
+`mirror_api/owner_shell.py` and package `mirror_api/__init__.py` still have the
+previous exact Git blob IDs. The Owner Shell Python module imports only the
+standard library, not `mirror_api/operations.py`. The adapter therefore
+requires **both** the exact accepted Mirror commit and those immutable runtime
+blob IDs; a newer Mirror commit fails closed with
+`OWNER_SHELL_SOURCE_PIN_CHANGED`, rather than silently accepting new source.
+No broad `mirror_api` tree allowlist or generic SHA bypass is used.
+
+The adapter still checks Git origin, clean main, protected key, Bearer, config
+and existing receipt DB ACL; unoccupied port 10443; and only binds to
+127.0.0.1:10443. It does no Git update, Docker change, Gateway release,
+service installation or firewall change. A future Mirror update requires a
+separate explicit source review and pin update.
 
 A new empty receipt DB breaks durable UUID replay and UNCERTAIN
 protection: never substitute one. This service grants authenticated

@@ -249,24 +249,26 @@ try {
     $null = Get-Command py.exe -CommandType Application -ErrorAction Stop
     $branch = (& $git -C $repo branch --show-current | Out-String).Trim()
     if ($LASTEXITCODE -ne 0 -or $branch -cne 'main') { throw 'OWNER_SHELL_SOURCE_NOT_MAIN' }
-    # Preserve the reviewed Mirror base and only permit the documented
-    # Gateway READ runbook update. Other Mirror changes require new review.
+    # This reviewed Mirror revision contains Browser UI changes, but the
+    # Owner Shell launcher, its Python module and its package initializer are
+    # byte-for-byte unchanged. Admit only this exact source revision; NEVER
+    # use an allow-all diff or pin the entire changing mirror_api tree.
     $approvedBase = 'a5cb3e9f61e68331c11337eb5da4af056d27660c'
+    $approvedMirror = 'c0f5db887f29996ee3464cf991674c31d0a22eaf'
     $sha = (& $git -C $repo rev-parse HEAD | Out-String).Trim()
     if ($LASTEXITCODE -ne 0 -or $sha -cnotmatch '^[0-9a-f]{40}$') {
         throw 'OWNER_SHELL_SOURCE_HEAD_INVALID'
     }
     & $git -C $repo merge-base --is-ancestor $approvedBase $sha | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'OWNER_SHELL_SOURCE_BASE_MISMATCH' }
-    $changed = @(& $git -C $repo diff --name-only --no-ext-diff $approvedBase $sha)
-    if ($LASTEXITCODE -ne 0 -or
-        @($changed | Where-Object { $_ -cne 'docs/GATEWAY-READ-ONLY.md' }).Count -ne 0) {
-        throw 'OWNER_SHELL_SOURCE_DIFF_DENIED'
-    }
-    # Ancestry/diff is the main guard; pin the executable source objects too.
+    if ($sha -cne $approvedMirror) { throw 'OWNER_SHELL_SOURCE_PIN_CHANGED' }
+    # Python module invocation: py -3 -m mirror_api.owner_shell. The module
+    # imports standard-library modules only. Pin its exact Git blob and the
+    # package initializer, separately from unrelated Browser/READ modules.
     $sourceBlobs = [ordered]@{
         'Start-OwnerPowerShellExecutor.ps1' = '36798dbc1c48829eb395b08128618ac3c8962b57'
-        'mirror_api' = '390ad3cd7938364a5861cb9d3ef707f31d7037b9'
+        'mirror_api/__init__.py' = '9cebe46e8c113d55d1aca036cca594a2f2853b56'
+        'mirror_api/owner_shell.py' = '166983065044257a20cc9252fbe6859c44ccdff4'
     }
     foreach ($rel in $sourceBlobs.Keys) {
         $actual = (& $git -C $repo rev-parse --verify ('HEAD:' + $rel) | Out-String).Trim()
