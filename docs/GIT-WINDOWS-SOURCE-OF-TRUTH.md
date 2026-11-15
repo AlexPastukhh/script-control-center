@@ -73,6 +73,10 @@ Tunnel source. The old corrected owner result remains dated evidence; a source
 pull or Preview is separate from actual reconnect. Any future helper refresh
 is tracked only in [BACKLOG-IMPROVEMENTS](BACKLOG-IMPROVEMENTS.md).
 
+## Repo1 runtime diagnostics source update (2026-11-15)
+
+The resolver pins the matching Tunnel manifest for visible Repo1 runtime stdout/stderr and its printed `RuntimeLog=` path. Merge the Tunnel change before this resolver update, then use the routine paired updater above. Updating only one clone fails the existing manifest gate. Diagnostic interpretation and owner-local access to existing JSONL logs belong to [Tunnel's Repo1 diagnostics](https://github.com/AlexPastukhh/tunnel/blob/main/docs/REPO1-RUNTIME-DIAGNOSTICS.md). This source change does not establish the cause of `Session terminated` or restart either worker.
+
 ## Reconnect and rollback
 
 A successful pull, hash check, compile or Preview is not a live MCP reconnect test. If a reconnect is required, use a separate owner-controlled window, reconnect one Repo at a time, keep the other working route and recovery path available, and verify real MCP responses. Do not stop the shared Docker container as part of a routine source update.
