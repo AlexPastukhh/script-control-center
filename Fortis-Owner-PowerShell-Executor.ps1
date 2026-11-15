@@ -245,47 +245,11 @@ try {
     if (-not (Test-Path -LiteralPath $launcher -PathType Leaf)) {
         throw 'OWNER_SHELL_LAUNCHER_MISSING'
     }
-    $git = (Get-Command git.exe -CommandType Application -ErrorAction Stop).Source
     $null = Get-Command py.exe -CommandType Application -ErrorAction Stop
-    $branch = (& $git -C $repo branch --show-current | Out-String).Trim()
-    if ($LASTEXITCODE -ne 0 -or $branch -cne 'main') { throw 'OWNER_SHELL_SOURCE_NOT_MAIN' }
-    # This reviewed Mirror revision contains Browser UI changes, but the
-    # Owner Shell launcher, its Python module and its package initializer are
-    # byte-for-byte unchanged. Admit only this exact source revision; NEVER
-    # use an allow-all diff or pin the entire changing mirror_api tree.
-    $approvedBase = 'a5cb3e9f61e68331c11337eb5da4af056d27660c'
-    $approvedMirror = 'c0f5db887f29996ee3464cf991674c31d0a22eaf'
-    $sha = (& $git -C $repo rev-parse HEAD | Out-String).Trim()
-    if ($LASTEXITCODE -ne 0 -or $sha -cnotmatch '^[0-9a-f]{40}$') {
-        throw 'OWNER_SHELL_SOURCE_HEAD_INVALID'
-    }
-    & $git -C $repo merge-base --is-ancestor $approvedBase $sha | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw 'OWNER_SHELL_SOURCE_BASE_MISMATCH' }
-    if ($sha -cne $approvedMirror) { throw 'OWNER_SHELL_SOURCE_PIN_CHANGED' }
-    # Python module invocation: py -3 -m mirror_api.owner_shell. The module
-    # imports standard-library modules only. Pin its exact Git blob and the
-    # package initializer, separately from unrelated Browser/READ modules.
-    $sourceBlobs = [ordered]@{
-        'Start-OwnerPowerShellExecutor.ps1' = '36798dbc1c48829eb395b08128618ac3c8962b57'
-        'mirror_api/__init__.py' = '9cebe46e8c113d55d1aca036cca594a2f2853b56'
-        'mirror_api/owner_shell.py' = '166983065044257a20cc9252fbe6859c44ccdff4'
-    }
-    foreach ($rel in $sourceBlobs.Keys) {
-        $actual = (& $git -C $repo rev-parse --verify ('HEAD:' + $rel) | Out-String).Trim()
-        if ($LASTEXITCODE -ne 0 -or $actual -cne $sourceBlobs[$rel]) {
-            throw 'OWNER_SHELL_SOURCE_BLOB_MISMATCH'
-        }
-    }
-    $dirty = @(& $git -C $repo status --porcelain=v1 --untracked-files=all)
-    if ($LASTEXITCODE -ne 0 -or $dirty.Count -ne 0) {
-        throw 'OWNER_SHELL_SOURCE_DIRTY'
-    }
-    $origin = (& $git -C $repo remote get-url origin | Out-String).Trim()
-    if ($LASTEXITCODE -ne 0 -or $origin -notmatch
-        '^(?i:https://github\.com/AlexPastukhh/docke-windows-mirror(?:\.git)?|git@github\.com:AlexPastukhh/docke-windows-mirror(?:\.git)?)$') {
-        throw 'OWNER_SHELL_SOURCE_ORIGIN_INVALID'
-    }
-
+    # Use the currently installed, synchronized Mirror main. Reviewed PRs can
+    # advance it without needing a new fixed-SHA allowlist in Script Center.
+    . (Join-Path $PSScriptRoot 'Get-FortisMirrorWindowsMain.ps1')
+    $mirror = Get-FortisMirrorWindowsMain -Root $repo -Caller 'OWNER_SHELL'
     $configPath = Join-Path $env:LOCALAPPDATA 'Fortis\OwnerShell\script-center-launch.json'
     $names = @('serverCert','serverKey','clientCA','secretFile','receiptDb')
     $exists = Test-Path -LiteralPath $configPath -PathType Leaf
@@ -321,6 +285,12 @@ try {
     }
     if (@(Get-NetTCPConnection -LocalPort 10443 -State Listen -ErrorAction SilentlyContinue).Count -ne 0) {
         throw 'OWNER_SHELL_PORT_IN_USE_DO_NOT_DUPLICATE'
+    }
+    # Credentials and configuration were checked after source validation.
+    # Re-validate immediately before invoking the command-capable listener.
+    $currentMirror = Get-FortisMirrorWindowsMain -Root $repo -Caller 'OWNER_SHELL'
+    if ($currentMirror.HeadSha -cne $mirror.HeadSha) {
+        throw 'OWNER_SHELL_SOURCE_CHANGED_DURING_PREFLIGHT'
     }
     Write-Host 'OWNER_SHELL_SCRIPT_CENTER_PREFLIGHT_PASS'
     Write-Host 'Launching existing Windows Executor on 127.0.0.1:10443.'

@@ -10,15 +10,14 @@ class MirrorGatewayReadLauncherTest(unittest.TestCase):
         text = (ROOT / "Fortis-Mirror-Gateway-Read.ps1").read_text("utf-8-sig")
         for part in (
             "#requires -Version 5.1", "Start-MirrorGatewayReadOnly.ps1",
-            "c0f5db887f29996ee3464cf991674c31d0a22eaf",
-            "MIRROR_SOURCE_PIN_CHANGED", "MIRROR_RUNTIME_BLOB_MISMATCH", "MIRROR_SOURCE_DIRTY",
-            "MIRROR_ORIGIN_DENIED", "MIRROR_ELEVATED_DENIED",
+            "Get-FortisMirrorWindowsMain.ps1", "-Caller 'MIRROR'",
+            "MIRROR_ELEVATED_DENIED",
             "MIRROR_PRIVATE_ACL_", "SetAccessRuleProtection($true, $false)",
             "AreAccessRulesProtected", "MIRROR_CONFIG_SCHEMA_INVALID",
             "MIRROR_HTTPS_PATHS_CONFIGURED=YES", "MIRROR_HTTPS_STARTED=NO",
             "MIRROR_SCRIPT_CENTER_PREFLIGHT_PASS",
             "MIRROR_HTTPS_PORT_443=OCCUPIED_OR_UNKNOWN", "MIRROR_HTTPS_LIVE_HEALTH=NOT_TESTED",
-            "-SourceSha $pin", "-Bind '127.0.0.1'", "-AllowedRepo @('fortis-approvals')",
+            "-SourceSha $mirrorSource.HeadSha", "-Bind '127.0.0.1'", "-AllowedRepo @('fortis-approvals')",
         ):
             with self.subTest(part=part):
                 self.assertIn(part, text)
@@ -29,18 +28,18 @@ class MirrorGatewayReadLauncherTest(unittest.TestCase):
             with self.subTest(banned=banned):
                 self.assertNotIn(banned, text)
 
-    def test_exact_gateway_read_runtime_blob_pins(self):
+    def test_gateway_read_passes_verified_current_head_to_launcher(self):
         source = (ROOT / "Fortis-Mirror-Gateway-Read.ps1").read_text("utf-8-sig")
         for marker in (
-            "'Start-MirrorGatewayReadOnly.ps1' = '368db7bb6ac4b64d6ecff0fda76a62ae3ff5779c'",
-            "'mirror_api/__init__.py' = '9cebe46e8c113d55d1aca036cca594a2f2853b56'",
-            "'mirror_api/gateway_readonly.py' = '93c61da0270f1d5d6fe97ba36a34579c403332d9'",
-            "'mirror_api/operations.py' = '43d752412c8102a92c0804aa254623ce230347a9'",
-            "if ($LASTEXITCODE -ne 0 -or $sha -cne $pin) { throw 'MIRROR_SOURCE_PIN_CHANGED' }",
-            "if ($LASTEXITCODE -ne 0 -or $actual -cne $runtimeBlobs[$rel])"):
+            ". (Join-Path $PSScriptRoot 'Get-FortisMirrorWindowsMain.ps1')",
+            "Get-FortisMirrorWindowsMain -Root $root -Caller 'MIRROR'",
+            "HeadSha = $mirror.HeadSha",
+            "& ($mirrorSource.Launcher) -SourceSha $mirrorSource.HeadSha"):
             self.assertIn(marker, source)
-        self.assertNotIn("git pull", source)
-        self.assertNotIn("git fetch", source)
+        for removed in ("$pin =", "runtimeBlobs", "SOURCE_PIN_CHANGED", "RUNTIME_BLOB_MISMATCH"):
+            self.assertNotIn(removed,source)
+        for blocked in ("git pull", "git fetch"):
+            self.assertNotIn(blocked, source)
 
     def test_paths_only_first_setup_and_manual_catalog(self):
         data = (ROOT / "TEXT-IMPORT-MIRROR-GATEWAY-READ.txt").read_text("utf-8-sig")

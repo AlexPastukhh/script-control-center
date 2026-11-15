@@ -11,9 +11,8 @@ class OwnerPowerShellAdapterTest(unittest.TestCase):
         self.assertTrue(data.startswith(bytes.fromhex("efbbbf")))
         source=data.decode("utf-8-sig")
         for item in ("#requires -Version 5.1", "OWNER_SHELL_ADMIN_DENIED",
-                     "OWNER_SHELL_SOURCE_BASE_MISMATCH", "OWNER_SHELL_SOURCE_PIN_CHANGED",
-                     "OWNER_SHELL_SOURCE_BLOB_MISMATCH", "OWNER_SHELL_SOURCE_DIRTY",
-                     "OWNER_SHELL_SOURCE_ORIGIN_INVALID", "OWNER_SHELL_PORT_IN_USE",
+                     "Get-FortisMirrorWindowsMain.ps1", "-Caller 'OWNER_SHELL'",
+                     "OWNER_SHELL_PORT_IN_USE",
                      "Assert-PrivateFile", "AreAccessRulesProtected",
                      "OWNER_SHELL_PATHS_CONFIGURED=YES", "OWNER_SHELL_STARTED=NO",
                      "127.0.0.1", "10443", "Start-OwnerPowerShellExecutor.ps1",
@@ -26,22 +25,20 @@ class OwnerPowerShellAdapterTest(unittest.TestCase):
             with self.subTest(denied=denied):
                 self.assertNotIn(denied,source)
 
-    def test_exact_mirror_release_pin_preserves_owner_shell_runtime(self):
+    def test_owner_shell_accepts_new_approved_main_without_sha_changes(self):
         source=(ROOT/"Fortis-Owner-PowerShell-Executor.ps1").read_text("utf-8-sig")
-        self.assertIn("merge-base --is-ancestor $approvedBase $sha",source)
-        self.assertIn("$approvedMirror = 'c0f5db887f29996ee3464cf991674c31d0a22eaf'",source)
-        self.assertIn("if ($sha -cne $approvedMirror) { throw 'OWNER_SHELL_SOURCE_PIN_CHANGED' }",source)
-        for marker in (
-            "'Start-OwnerPowerShellExecutor.ps1' = '36798dbc1c48829eb395b08128618ac3c8962b57'",
-            "'mirror_api/__init__.py' = '9cebe46e8c113d55d1aca036cca594a2f2853b56'",
-            "'mirror_api/owner_shell.py' = '166983065044257a20cc9252fbe6859c44ccdff4'",
-            "OWNER_SHELL_SOURCE_BLOB_MISMATCH", "OWNER_SHELL_SOURCE_DIRTY",
-            "OWNER_SHELL_SOURCE_ORIGIN_INVALID"):
-            self.assertIn(marker,source)
-        # Do not re-admit all later source revisions via a permissive allowlist.
-        self.assertNotIn("diff --name-only --no-ext-diff",source)
-        self.assertNotIn("'mirror_api' =",source)
-        self.assertLess(source.index('OWNER_SHELL_SOURCE_PIN_CHANGED'),source.index('OWNER_SHELL_SOURCE_DIRTY'))
+        self.assertIn(". (Join-Path $PSScriptRoot 'Get-FortisMirrorWindowsMain.ps1')",source)
+        self.assertIn("Get-FortisMirrorWindowsMain -Root $repo -Caller 'OWNER_SHELL'",source)
+        self.assertIn("Start-OwnerPowerShellExecutor.ps1",source)
+        self.assertIn("$currentMirror = Get-FortisMirrorWindowsMain -Root $repo -Caller 'OWNER_SHELL'",source)
+        self.assertIn("OWNER_SHELL_SOURCE_CHANGED_DURING_PREFLIGHT",source)
+        # Mirror's source version must not be hardcoded or allowlisted here.
+        for removed in ("$approvedMirror", "$approvedBase", "sourceBlobs",
+                        "SOURCE_PIN_CHANGED", "SOURCE_BLOB_MISMATCH",
+                        "diff --name-only --no-ext-diff"):
+            self.assertNotIn(removed,source)
+        self.assertNotIn("git fetch",source)
+        self.assertNotIn("git pull",source)
 
     def test_one_time_winforms_setup_and_protected_persistence(self):
         source=(ROOT/"Fortis-Owner-PowerShell-Executor.ps1").read_text("utf-8-sig")

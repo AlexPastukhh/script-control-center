@@ -180,20 +180,26 @@ and [Windows sync UC](https://github.com/AlexPastukhh/docke-windows-mirror/blob/
 This repo owns only the thin compatibility launcher; it does not perform clone,
 pull or deployment as a side effect of launching it.
 
-## Optional Mirror listener adapters and reviewed source pin
+## Optional Mirror listener adapters: tracking reviewed main
 
 `Fortis-Owner-PowerShell-Executor.ps1` and `Fortis-Mirror-Gateway-Read.ps1`
-are manually registered, independent `window` entries, not part of the normal
-Mirror Browser. Both require the **exact reviewed** clean Windows Mirror
-`main` commit `c0f5db887f29996ee3464cf991674c31d0a22eaf`.
-The Owner Executor separately pins its unchanged PowerShell launcher and
-Python owner-shell module; Gateway READ pins its listener **and** changed
-read-only observation module. Later Mirror commits must be reviewed and pinned
-explicitly. Neither adapter installs a listener or performs Git updates as
-part of registration; the source update alone does not activate either one.
+are independent, manually registered `window` entries, not part of the normal
+Mirror Browser. They both use the shared read-only
+`Get-FortisMirrorWindowsMain.ps1` to verify the Windows `docke-windows-mirror`
+checkout: canonical primary clone, expected owner GitHub origin, clean `main`
+and exact local `HEAD == refs/remotes/origin/main`. No fixed source SHAs remain.
+The GET-only adapter passes the verified current SHA to its Mirror launcher.
+
+The **normal approved Windows Mirror update** is sufficient for future Mirror
+`main` versions to run through these entries; no additional Script Center
+source-pin PR or per-version config is required. Launching never pulls from
+GitHub or changes Docker, keys, receipt DB, ACLs, ports or services. If the
+checkout is dirty, not from the expected origin, off-main, or not fully synced,
+launch is refused. Git source validation cannot replace the security review
+of future owner GitHub merges, particularly for the command-capable Executor.
 See [Executor](docs/OWNER-POWERSHELL-EXECUTOR-LAUNCH.md) and
-[Gateway READ](docs/MIRROR-GATEWAY-READ-LAUNCH.md) for required credentials,
-owner-only setup and runtime restrictions.
+[Gateway READ](docs/MIRROR-GATEWAY-READ-LAUNCH.md) for separate credential,
+port and owner setup requirements.
 
 ## Requirements and verification
 

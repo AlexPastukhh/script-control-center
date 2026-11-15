@@ -38,28 +38,34 @@ with protected ACL. The saved receipt DB identity **cannot be changed** through
 this convenience UI: a different DB needs an independently reviewed
 owner recovery procedure. Do not create an empty DB or replace secrets here.
 
-The adapter requires a non-admin Windows identity and the **exact clean**
-`docke-windows-mirror/main` commit
-`c0f5db887f29996ee3464cf991674c31d0a22eaf`, descended from the
-accepted base `a5cb3e9f61e68331c11337eb5da4af056d27660c`.
+The adapter requires a non-admin Windows identity and a trusted, **clean,
+synchronized** Windows `docke-windows-mirror/main` clone. On each launch it
+reads Git metadata without fetching or modifying source and verifies:
 
-Mirror PR #19–22 modified Browser and `mirror_api/operations.py`, so the old
-"only docs/GATEWAY-READ-ONLY.md changed since base" restriction rejects the
-current clean Mirror source. In the reviewed current commit the Owner Shell
-execution code is unchanged: `Start-OwnerPowerShellExecutor.ps1`,
-`mirror_api/owner_shell.py` and package `mirror_api/__init__.py` still have the
-previous exact Git blob IDs. The Owner Shell Python module imports only the
-standard library, not `mirror_api/operations.py`. The adapter therefore
-requires **both** the exact accepted Mirror commit and those immutable runtime
-blob IDs; a newer Mirror commit fails closed with
-`OWNER_SHELL_SOURCE_PIN_CHANGED`, rather than silently accepting new source.
-No broad `mirror_api` tree allowlist or generic SHA bypass is used.
+- the canonical `%USERPROFILE%\Repos\docke-windows-mirror` primary checkout,
+  with a real `.git` directory (not a symlink or task worktree);
+- the owner GitHub `AlexPastukhh/docke-windows-mirror` origin;
+- branch `main`, clean tracked/untracked state, and **HEAD exactly equals the
+  locally fetched `refs/remotes/origin/main`**.
 
-The adapter still checks Git origin, clean main, protected key, Bearer, config
-and existing receipt DB ACL; unoccupied port 10443; and only binds to
-127.0.0.1:10443. It does no Git update, Docker change, Gateway release,
-service installation or firewall change. A future Mirror update requires a
-separate explicit source review and pin update.
+This replaces the historical SHA and `mirror_api` tree pins that blocked
+launch after unrelated Browser updates. An approved Mirror `main` update
+arriving through the normal Windows clone sync needs **no subsequent Script
+Center source-pin edit or additional PR**. The adapter does not fetch or
+self-update at launch and cannot independently check whether the actual
+GitHub remote advanced since the last fetch; the normal approved Windows
+update remains responsible for delivering the latest source.
+
+The Owner Shell's executable code is now trusted as part of that clean
+owner-controlled GitHub `main`, rather than only at one fixed commit. That is
+an intentional trust-boundary change: future merged `owner_shell.py` changes
+can launch automatically. Protect GitHub merges and the Windows account;
+Git cleanliness alone does not prove that the code itself is safe.
+
+The adapter still checks the protected key, Bearer, config and existing receipt
+DB ACL, an unoccupied port 10443, and binds only to 127.0.0.1:10443. It does
+no Git update, Docker change, Gateway release, service installation or firewall
+change.
 
 A new empty receipt DB breaks durable UUID replay and UNCERTAIN
 protection: never substitute one. This service grants authenticated
