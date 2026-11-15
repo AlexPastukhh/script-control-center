@@ -10,15 +10,14 @@ class MirrorGatewayReadLauncherTest(unittest.TestCase):
         text = (ROOT / "Fortis-Mirror-Gateway-Read.ps1").read_text("utf-8-sig")
         for part in (
             "#requires -Version 5.1", "Start-MirrorGatewayReadOnly.ps1",
-            "efa353791e1cd79ef5d0122019ffb982e21cab4e",
-            "MIRROR_SOURCE_PIN_CHANGED", "MIRROR_SOURCE_DIRTY",
-            "MIRROR_ORIGIN_DENIED", "MIRROR_ELEVATED_DENIED",
+            "Get-FortisMirrorWindowsMain.ps1", "-Caller 'MIRROR'",
+            "MIRROR_ELEVATED_DENIED",
             "MIRROR_PRIVATE_ACL_", "SetAccessRuleProtection($true, $false)",
             "AreAccessRulesProtected", "MIRROR_CONFIG_SCHEMA_INVALID",
             "MIRROR_HTTPS_PATHS_CONFIGURED=YES", "MIRROR_HTTPS_STARTED=NO",
             "MIRROR_SCRIPT_CENTER_PREFLIGHT_PASS",
             "MIRROR_HTTPS_PORT_443=OCCUPIED_OR_UNKNOWN", "MIRROR_HTTPS_LIVE_HEALTH=NOT_TESTED",
-            "-SourceSha $pin", "-Bind '127.0.0.1'", "-AllowedRepo @('fortis-approvals')",
+            "-SourceSha $mirrorSource.HeadSha", "-Bind '127.0.0.1'", "-AllowedRepo @('fortis-approvals')",
         ):
             with self.subTest(part=part):
                 self.assertIn(part, text)
@@ -28,6 +27,19 @@ class MirrorGatewayReadLauncherTest(unittest.TestCase):
                        "Invoke-Expression", "catalog.xml"):
             with self.subTest(banned=banned):
                 self.assertNotIn(banned, text)
+
+    def test_gateway_read_passes_verified_current_head_to_launcher(self):
+        source = (ROOT / "Fortis-Mirror-Gateway-Read.ps1").read_text("utf-8-sig")
+        for marker in (
+            ". (Join-Path $PSScriptRoot 'Get-FortisMirrorWindowsMain.ps1')",
+            "Get-FortisMirrorWindowsMain -Root $root -Caller 'MIRROR'",
+            "HeadSha = $mirror.HeadSha",
+            "& ($mirrorSource.Launcher) -SourceSha $mirrorSource.HeadSha"):
+            self.assertIn(marker, source)
+        for removed in ("$pin =", "runtimeBlobs", "SOURCE_PIN_CHANGED", "RUNTIME_BLOB_MISMATCH"):
+            self.assertNotIn(removed,source)
+        for blocked in ("git pull", "git fetch"):
+            self.assertNotIn(blocked, source)
 
     def test_paths_only_first_setup_and_manual_catalog(self):
         data = (ROOT / "TEXT-IMPORT-MIRROR-GATEWAY-READ.txt").read_text("utf-8-sig")

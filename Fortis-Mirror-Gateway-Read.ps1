@@ -8,7 +8,6 @@ No Git update, credential creation, service install, Docker writes or firewall c
 param([switch]$Status)
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
-$pin = 'efa353791e1cd79ef5d0122019ffb982e21cab4e'
 $configPath = Join-Path $env:LOCALAPPDATA 'Fortis\MirrorRead\script-center-paths.json'
 
 function Assert-LocalFile {
@@ -52,21 +51,12 @@ function Get-MirrorLauncher {
     if (-not (Test-Path -LiteralPath $launcher -PathType Leaf)) {
         throw 'MIRROR_LAUNCHER_MISSING'
     }
-    $git = (Get-Command git.exe -CommandType Application -ErrorAction Stop).Source
     $null = Get-Command py.exe -CommandType Application -ErrorAction Stop
     $null = Get-Command docker.exe -CommandType Application -ErrorAction Stop
-    $branch = (& $git -C $root branch --show-current | Out-String).Trim()
-    if ($LASTEXITCODE -ne 0 -or $branch -cne 'main') { throw 'MIRROR_BRANCH_CHANGED' }
-    $sha = (& $git -C $root rev-parse HEAD | Out-String).Trim()
-    if ($LASTEXITCODE -ne 0 -or $sha -cne $pin) { throw 'MIRROR_SOURCE_PIN_CHANGED' }
-    $dirty = @(& $git -C $root status --porcelain=v1 --untracked-files=all)
-    if ($LASTEXITCODE -ne 0 -or $dirty.Count -ne 0) { throw 'MIRROR_SOURCE_DIRTY' }
-    $origin = (& $git -C $root remote get-url origin | Out-String).Trim()
-    if ($LASTEXITCODE -ne 0 -or $origin -notmatch
-        '^(?i:https://github\.com/AlexPastukhh/docke-windows-mirror(?:\.git)?|git@github\.com:AlexPastukhh/docke-windows-mirror(?:\.git)?)$') {
-        throw 'MIRROR_ORIGIN_DENIED'
-    }
-    return $launcher
+    . (Join-Path $PSScriptRoot 'Get-FortisMirrorWindowsMain.ps1')
+    $mirror = Get-FortisMirrorWindowsMain -Root $root -Caller 'MIRROR'
+    return [PSCustomObject]@{ Launcher = $launcher; HeadSha = $mirror.HeadSha }
+
 }
 
 function Get-OwnerSetup {
@@ -186,7 +176,7 @@ try {
         [Security.Principal.WindowsBuiltInRole]::Administrator)) {
         throw 'MIRROR_ELEVATED_DENIED'
     }
-    $launcher = Get-MirrorLauncher
+    $mirrorSource = Get-MirrorLauncher
     if (-not (Test-Path -LiteralPath $configPath -PathType Leaf)) {
         if ($Status) {
             Write-Host 'MIRROR_HTTPS_CONFIG=NOT_CONFIGURED'
@@ -225,7 +215,7 @@ try {
     }
     Write-Host 'MIRROR_SCRIPT_CENTER_PREFLIGHT_PASS'
     Write-Host 'Starting standalone Mirror GET-only listener on 127.0.0.1:443; Ctrl+C stops it.'
-    & $launcher -SourceSha $pin -Bind '127.0.0.1' -CertificatePath $cert -KeyPath $key -SecretFile $secret -AllowedRepo @('fortis-approvals')
+    & ($mirrorSource.Launcher) -SourceSha $mirrorSource.HeadSha -Bind '127.0.0.1' -CertificatePath $cert -KeyPath $key -SecretFile $secret -AllowedRepo @('fortis-approvals')
     if (-not $?) { throw 'MIRROR_READ_LISTENER_FAILED' }
 } catch {
     [Console]::Error.WriteLine('MIRROR_SCRIPT_CENTER_STOP: ' + $_.Exception.Message)

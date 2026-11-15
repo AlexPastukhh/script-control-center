@@ -180,6 +180,27 @@ and [Windows sync UC](https://github.com/AlexPastukhh/docke-windows-mirror/blob/
 This repo owns only the thin compatibility launcher; it does not perform clone,
 pull or deployment as a side effect of launching it.
 
+## Optional Mirror listener adapters: tracking reviewed main
+
+`Fortis-Owner-PowerShell-Executor.ps1` and `Fortis-Mirror-Gateway-Read.ps1`
+are independent, manually registered `window` entries, not part of the normal
+Mirror Browser. They both use the shared read-only
+`Get-FortisMirrorWindowsMain.ps1` to verify the Windows `docke-windows-mirror`
+checkout: canonical primary clone, expected owner GitHub origin, clean `main`
+and exact local `HEAD == refs/remotes/origin/main`. No fixed source SHAs remain.
+The GET-only adapter passes the verified current SHA to its Mirror launcher.
+
+The **normal approved Windows Mirror update** is sufficient for future Mirror
+`main` versions to run through these entries; no additional Script Center
+source-pin PR or per-version config is required. Launching never pulls from
+GitHub or changes Docker, keys, receipt DB, ACLs, ports or services. If the
+checkout is dirty, not from the expected origin, off-main, or not fully synced,
+launch is refused. Git source validation cannot replace the security review
+of future owner GitHub merges, particularly for the command-capable Executor.
+See [Executor](docs/OWNER-POWERSHELL-EXECUTOR-LAUNCH.md) and
+[Gateway READ](docs/MIRROR-GATEWAY-READ-LAUNCH.md) for separate credential,
+port and owner setup requirements.
+
 ## Requirements and verification
 
 The UI requires **Windows PowerShell 5.1, Windows Forms and an STA thread**. It is not a Linux-native application. The existing Docker workspace can edit the source and run the static Python regression tests, but it cannot verify real WinForms compilation or GUI behavior.
