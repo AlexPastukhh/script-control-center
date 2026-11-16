@@ -27,7 +27,7 @@ function Get-FortisPowerShellExecutorWindowsMain {
         ($gitMeta.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
         throw ($Caller + '_SOURCE_NOT_PRIMARY_CLONE')
     }
-    $git = (Get-Command git.exe -CommandType Application -ErrorAction Stop).Source
+    $git = (Get-Command git.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
     $top = @(& $git -C $actual rev-parse --show-toplevel 2>&1)
     if ($LASTEXITCODE -ne 0 -or $top.Count -ne 1 -or
         -not [string]::Equals([IO.Path]::GetFullPath([string]$top[0]).TrimEnd('\'),

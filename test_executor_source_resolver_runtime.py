@@ -40,9 +40,17 @@ class ExecutorSourceResolver(unittest.TestCase):
             self.env["PATH"] = str(shim) + os.pathsep + self.env.get("PATH", "")
         self.wrapper = self.profile / "probe.ps1"
         self.wrapper.write_text(r"""
-param([string]$Helper,[string]$ProfileRoot,[string]$SourceRoot)
+param([string]$Helper,[string]$ProfileRoot,[string]$SourceRoot,[switch]$RepeatGitDiscovery)
 $ErrorActionPreference = 'Stop'
 $env:USERPROFILE = $ProfileRoot
+if ($RepeatGitDiscovery) {
+    function Get-Command {
+        param($Name,$CommandType,$ErrorAction)
+        $found = @(Microsoft.PowerShell.Core\Get-Command @PSBoundParameters)
+        $found
+        $found
+    }
+}
 . $Helper
 try {
     $value = Get-FortisPowerShellExecutorWindowsMain -Root $SourceRoot -Caller OWNER_SHELL
@@ -59,12 +67,13 @@ try {
             [GIT, "-c", "core.hooksPath=/dev/null", "-C", str(self.repo), *args],
             stderr=subprocess.DEVNULL).decode().strip()
 
-    def probe(self, root=None):
+    def probe(self, root=None, duplicate_git=False):
         return subprocess.run(
             [POWERSHELL, "-NoLogo", "-NoProfile", "-NonInteractive", "-File",
              str(self.wrapper), "-Helper",
              str(ROOT / "Get-FortisPowerShellExecutorWindowsMain.ps1"),
-             "-ProfileRoot", str(self.profile), "-SourceRoot", str(root or self.repo)],
+             "-ProfileRoot", str(self.profile), "-SourceRoot", str(root or self.repo)]
+            + (["-RepeatGitDiscovery"] if duplicate_git else []),
             capture_output=True, text=True, env=self.env, timeout=20)
 
     def denied(self, code, root=None):
@@ -79,6 +88,12 @@ try {
         data = json.loads(line[len("RESULT:"):])
         self.assertEqual(self.head, data["HeadSha"])
         self.assertEqual(str(self.repo).lower(), data["Root"].lower())
+
+    def test_multiple_git_discovery_results_select_one_executable(self):
+        response = self.probe(duplicate_git=True)
+        self.assertEqual(0, response.returncode, response.stdout + response.stderr)
+        line = next(x for x in response.stdout.splitlines() if x.startswith("RESULT:"))
+        self.assertEqual(self.head, json.loads(line[len("RESULT:"):])["HeadSha"])
 
     def test_mirror_path_is_rejected(self):
         self.denied("OWNER_SHELL_SOURCE_LOCATION_DENIED",

@@ -4,6 +4,8 @@ on:
     branches: [main]
   push:
     branches: [main]
+env:
+  PYTHONUTF8: '1'
 permissions:
   contents: read
 jobs:
