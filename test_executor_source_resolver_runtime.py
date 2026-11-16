@@ -87,7 +87,7 @@ try {
         line = next(x for x in response.stdout.splitlines() if x.startswith("RESULT:"))
         data = json.loads(line[len("RESULT:"):])
         self.assertEqual(self.head, data["HeadSha"])
-        self.assertEqual(str(self.repo).lower(), data["Root"].lower())
+        self.assertTrue(self.repo.samefile(data["Root"]), data["Root"])
 
     def test_multiple_git_discovery_results_select_one_executable(self):
         response = self.probe(duplicate_git=True)

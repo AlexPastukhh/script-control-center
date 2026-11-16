@@ -52,7 +52,7 @@ function Get-FortisPowerShellExecutorWindowsMain {
     $headOk = $LASTEXITCODE -eq 0 -and $head.Count -eq 1 -and
         [string]$head[0] -cmatch '^[0-9a-f]{40}$'
     if (-not $headOk) { throw ($Caller + '_SOURCE_HEAD_UNVERIFIED') }
-    $upstream = @(& $git -C $actual rev-parse --verify refs/remotes/origin/main 2>&1)
+    $upstream = @(& $git -C $actual rev-parse --verify --quiet refs/remotes/origin/main 2>&1)
     if ($LASTEXITCODE -ne 0 -or $upstream.Count -ne 1 -or
         [string]$upstream[0] -cnotmatch '^[0-9a-f]{40}$') {
         throw ($Caller + '_SOURCE_UPSTREAM_UNVERIFIED')
