@@ -77,6 +77,10 @@ is tracked only in [BACKLOG-IMPROVEMENTS](BACKLOG-IMPROVEMENTS.md).
 
 The resolver pins the matching Tunnel manifest for visible Repo1 runtime stdout/stderr and its printed `RuntimeLog=` path. Merge the Tunnel change before this resolver update, then use the routine paired updater above. Updating only one clone fails the existing manifest gate. Diagnostic interpretation and owner-local access to existing JSONL logs belong to [Tunnel's Repo1 diagnostics](https://github.com/AlexPastukhh/tunnel/blob/main/docs/REPO1-RUNTIME-DIAGNOSTICS.md). This source change does not establish the cause of `Session terminated` or restart either worker.
 
+## Shared runtime v0.0.21 (2026-11-16; source-only)
+
+The resolver pins the paired Tunnel source with one shared runtime/logging helper for both Repo profiles. Install the verified v0.0.21 EXE alongside v0.0.15 before applying the new source pins; the routine updater does not install binaries. Installation, artifact hashes, staged Repo1/Repo2 acceptance and rollback are owned by [Tunnel runtime resilience](https://github.com/AlexPastukhh/tunnel/blob/main/docs/REPO-RUNTIME-RESILIENCE.md). The Source CI compiles Script Catalog under Windows PowerShell 5.1/STA without starting GUI or workers. Live owner preflight remains required.
+
 ## Reconnect and rollback
 
 A successful pull, hash check, compile or Preview is not a live MCP reconnect test. If a reconnect is required, use a separate owner-controlled window, reconnect one Repo at a time, keep the other working route and recovery path available, and verify real MCP responses. Do not stop the shared Docker container as part of a routine source update.
