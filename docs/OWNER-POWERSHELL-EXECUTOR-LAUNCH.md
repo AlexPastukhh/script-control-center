@@ -1,5 +1,12 @@
 # Owner PowerShell Executor — opt-in Script Center entry
 
+**Migration source candidate:** this adapter now targets the standalone
+`fortis-powershell-executor` repository. Install only after its bootstrap,
+accepted main and Windows clone are ready. Current installed processes are
+not switched by this source change; there is no fallback to Mirror.
+Existing catalog registration and the five saved TLS/receipt paths stay valid.
+
+
 Register Fortis-Owner-PowerShell-Executor.ps1 through
 «Импорт из текста» using the one line in
 TEXT-IMPORT-OWNER-POWERSHELL.txt, then «Проверить» →
@@ -25,7 +32,7 @@ On success it writes only the five absolute paths to the ACL-protected
 service is launched by the save operation.
 
 Click Start again: the existing protected paths are loaded and validated
-automatically, then the accepted Mirror-owned
+automatically, then the accepted Executor-owned
 `Start-OwnerPowerShellExecutor.ps1` runs. No repeated setup or file prompts.
 Ctrl+C stops the running Executor in its console. Fatal preflight errors
 also show a modal error dialog instead of disappearing with a closed console.
@@ -39,17 +46,17 @@ this convenience UI: a different DB needs an independently reviewed
 owner recovery procedure. Do not create an empty DB or replace secrets here.
 
 The adapter requires a non-admin Windows identity and a trusted, **clean,
-synchronized** Windows `docke-windows-mirror/main` clone. On each launch it
+synchronized** Windows `fortis-powershell-executor/main` clone. On each launch it
 reads Git metadata without fetching or modifying source and verifies:
 
-- the canonical `%USERPROFILE%\Repos\docke-windows-mirror` primary checkout,
+- the canonical `%USERPROFILE%\Repos\fortis-powershell-executor` primary checkout,
   with a real `.git` directory (not a symlink or task worktree);
-- the owner GitHub `AlexPastukhh/docke-windows-mirror` origin;
+- the owner GitHub `AlexPastukhh/fortis-powershell-executor` origin;
 - branch `main`, clean tracked/untracked state, and **HEAD exactly equals the
   locally fetched `refs/remotes/origin/main`**.
 
-This replaces the historical SHA and `mirror_api` tree pins that blocked
-launch after unrelated Browser updates. An approved Mirror `main` update
+This replaces the historical fixed SHA and source-tree pins that blocked
+launch after unrelated Browser updates. An approved Executor `main` update
 arriving through the normal Windows clone sync needs **no subsequent Script
 Center source-pin edit or additional PR**. The adapter does not fetch or
 self-update at launch and cannot independently check whether the actual

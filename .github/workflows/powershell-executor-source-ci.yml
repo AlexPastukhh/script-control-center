@@ -1,0 +1,42 @@
+name: PowerShell Executor migration source CI
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+env:
+  PYTHONUTF8: '1'
+permissions:
+  contents: read
+jobs:
+  source:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Offline source and disposable-clone resolver tests
+        run: python -B -m unittest discover -v -p 'test_*.py'
+      - name: Windows PowerShell 5.1 syntax only
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          foreach ($sourceFile in @(
+            'Fortis-Owner-PowerShell-Executor.ps1',
+            'Get-FortisPowerShellExecutorWindowsMain.ps1'
+          )) {
+            $tokens = $null
+            $parseErrors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile(
+              (Join-Path $PWD $sourceFile), [ref]$tokens, [ref]$parseErrors)
+            if (@($parseErrors).Count -ne 0) { throw 'EXECUTOR_SOURCE_PARSE_FAILED' }
+          }
+          Write-Host 'EXECUTOR_MIGRATION_SOURCE_PARSE_PASS'

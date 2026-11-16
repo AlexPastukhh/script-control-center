@@ -11,7 +11,7 @@ class OwnerPowerShellAdapterTest(unittest.TestCase):
         self.assertTrue(data.startswith(bytes.fromhex("efbbbf")))
         source=data.decode("utf-8-sig")
         for item in ("#requires -Version 5.1", "OWNER_SHELL_ADMIN_DENIED",
-                     "Get-FortisMirrorWindowsMain.ps1", "-Caller 'OWNER_SHELL'",
+                     "Get-FortisPowerShellExecutorWindowsMain.ps1", "-Caller 'OWNER_SHELL'",
                      "OWNER_SHELL_PORT_IN_USE",
                      "Assert-PrivateFile", "AreAccessRulesProtected",
                      "OWNER_SHELL_PATHS_CONFIGURED=YES", "OWNER_SHELL_STARTED=NO",
@@ -27,18 +27,34 @@ class OwnerPowerShellAdapterTest(unittest.TestCase):
 
     def test_owner_shell_accepts_new_approved_main_without_sha_changes(self):
         source=(ROOT/"Fortis-Owner-PowerShell-Executor.ps1").read_text("utf-8-sig")
-        self.assertIn(". (Join-Path $PSScriptRoot 'Get-FortisMirrorWindowsMain.ps1')",source)
-        self.assertIn("Get-FortisMirrorWindowsMain -Root $repo -Caller 'OWNER_SHELL'",source)
+        self.assertIn(". (Join-Path $PSScriptRoot 'Get-FortisPowerShellExecutorWindowsMain.ps1')",source)
+        self.assertIn("Get-FortisPowerShellExecutorWindowsMain -Root $repo -Caller 'OWNER_SHELL'",source)
         self.assertIn("Start-OwnerPowerShellExecutor.ps1",source)
-        self.assertIn("$currentMirror = Get-FortisMirrorWindowsMain -Root $repo -Caller 'OWNER_SHELL'",source)
+        self.assertIn("$currentExecutor = Get-FortisPowerShellExecutorWindowsMain -Root $repo -Caller 'OWNER_SHELL'",source)
         self.assertIn("OWNER_SHELL_SOURCE_CHANGED_DURING_PREFLIGHT",source)
-        # Mirror's source version must not be hardcoded or allowlisted here.
+        # Executor's source version must not be hardcoded or allowlisted here.
         for removed in ("$approvedMirror", "$approvedBase", "sourceBlobs",
                         "SOURCE_PIN_CHANGED", "SOURCE_BLOB_MISMATCH",
                         "diff --name-only --no-ext-diff"):
             self.assertNotIn(removed,source)
         self.assertNotIn("git fetch",source)
         self.assertNotIn("git pull",source)
+
+    def test_executor_source_is_independent_from_mirror(self):
+        source=(ROOT/"Fortis-Owner-PowerShell-Executor.ps1").read_text("utf-8-sig")
+        helper=(ROOT/"Get-FortisPowerShellExecutorWindowsMain.ps1").read_text("utf-8-sig")
+        self.assertNotIn("docke-windows-mirror",source)
+        self.assertNotIn("Get-FortisMirrorWindowsMain",source)
+        self.assertIn("Repos\\fortis-powershell-executor",source)
+        for expected in ("fortis-powershell-executor", "SOURCE_NOT_PRIMARY_CLONE",
+                         "SOURCE_ORIGIN_DENIED", "SOURCE_NOT_MAIN",
+                         "SOURCE_DIRTY", "SOURCE_NOT_SYNCED",
+                         "refs/remotes/origin/main"):
+            self.assertIn(expected,helper)
+        self.assertNotIn("docke-windows-mirror",helper)
+        for denied in ("git fetch", "git pull", "git reset", "docker",
+                       "Invoke-Expression", "Set-Acl", "New-Item"):
+            self.assertNotIn(denied,helper)
 
     def test_one_time_winforms_setup_and_protected_persistence(self):
         source=(ROOT/"Fortis-Owner-PowerShell-Executor.ps1").read_text("utf-8-sig")
