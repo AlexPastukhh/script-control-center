@@ -240,16 +240,16 @@ try {
             [Security.Principal.WindowsBuiltInRole]::Administrator)) {
         throw 'OWNER_SHELL_ADMIN_DENIED'
     }
-    $repo = Join-Path $env:USERPROFILE 'Repos\docke-windows-mirror'
+    $repo = Join-Path $env:USERPROFILE 'Repos\fortis-powershell-executor'
     $launcher = Join-Path $repo 'Start-OwnerPowerShellExecutor.ps1'
     if (-not (Test-Path -LiteralPath $launcher -PathType Leaf)) {
         throw 'OWNER_SHELL_LAUNCHER_MISSING'
     }
     $null = Get-Command py.exe -CommandType Application -ErrorAction Stop
-    # Use the currently installed, synchronized Mirror main. Reviewed PRs can
+    # Use the currently installed, synchronized PowerShell Executor main. Reviewed PRs can
     # advance it without needing a new fixed-SHA allowlist in Script Center.
-    . (Join-Path $PSScriptRoot 'Get-FortisMirrorWindowsMain.ps1')
-    $mirror = Get-FortisMirrorWindowsMain -Root $repo -Caller 'OWNER_SHELL'
+    . (Join-Path $PSScriptRoot 'Get-FortisPowerShellExecutorWindowsMain.ps1')
+    $executor = Get-FortisPowerShellExecutorWindowsMain -Root $repo -Caller 'OWNER_SHELL'
     $configPath = Join-Path $env:LOCALAPPDATA 'Fortis\OwnerShell\script-center-launch.json'
     $names = @('serverCert','serverKey','clientCA','secretFile','receiptDb')
     $exists = Test-Path -LiteralPath $configPath -PathType Leaf
@@ -288,8 +288,8 @@ try {
     }
     # Credentials and configuration were checked after source validation.
     # Re-validate immediately before invoking the command-capable listener.
-    $currentMirror = Get-FortisMirrorWindowsMain -Root $repo -Caller 'OWNER_SHELL'
-    if ($currentMirror.HeadSha -cne $mirror.HeadSha) {
+    $currentExecutor = Get-FortisPowerShellExecutorWindowsMain -Root $repo -Caller 'OWNER_SHELL'
+    if ($currentExecutor.HeadSha -cne $executor.HeadSha) {
         throw 'OWNER_SHELL_SOURCE_CHANGED_DURING_PREFLIGHT'
     }
     Write-Host 'OWNER_SHELL_SCRIPT_CENTER_PREFLIGHT_PASS'
