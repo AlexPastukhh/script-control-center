@@ -62,7 +62,7 @@ function Get-FortisTunnelWindowsMirror {
 
     $currentRoot = Join-Path $tunnelRoot 'runtime\windows-repo\current'
     $manifestPath = Join-Path $currentRoot 'source-manifest.json'
-    $expectedManifestHash = '451FA3583D0F82BCB62AF9A4A6A4E74425688A6E296CD3824B34A3D812708FED'
+    $expectedManifestHash = '8036348F69BB37F94F5E6FDE529BF44A292F4EB91977CE91A491E9860AADBFCA'
     if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf) -or
         (Get-FileHash -LiteralPath $manifestPath -Algorithm SHA256).Hash -cne $expectedManifestHash) {
         throw 'Tunnel Windows source manifest is missing or has an unexpected fingerprint. Pull the reviewed tunnel main.'
@@ -84,7 +84,7 @@ function Get-FortisTunnelWindowsMirror {
         $manifest.source_repository -cne 'tunnel' -or
         $manifest.source_ref -cne 'tunnel:main' -or
         $manifest.source_revision_type -cne 'sha256_file_inventory_v1' -or
-        $manifest.source_revision -cne '45A163AF7F7052EAAD3649DD219025DA14F80C3169586721F640C1457AE2E086' -or
+        $manifest.source_revision -cne 'AEF7D17084F951AEAB6F98CF91E7A39E1D6043A0DAC6BC123DBF99463887B0F9' -or
         @($manifest.files).Count -ne $expectedFiles.Count) {
         throw 'Unexpected tunnel Windows source manifest. Nothing started.'
     }
