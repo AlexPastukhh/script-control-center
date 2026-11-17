@@ -69,7 +69,7 @@ function Assert-PrivateFile {
 . $Helper
 $optin=Join-Path $ProfileRoot 'Fortis\OwnerShell\machine-script-center.json'
 try {
-    $args=@{
+    $namedArgs=@{
         ConfigPath=$optin
         ExecutorRoot=$Root
         ExecutorHeadSha=$ExpectedHead
