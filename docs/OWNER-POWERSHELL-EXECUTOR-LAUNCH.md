@@ -80,3 +80,15 @@ Owner Portal commands arbitrary Windows user-level execution and
 is NOT a sandbox. Previous owner TLS material, identity, receipt DB
 and Portal session/Origin/CSRF checks require separate owner review.
 Windows PowerShell 5.1 live acceptance is not covered by source tests.
+
+
+## Machine ASK V1 — separate owner-controlled opt-in
+
+The existing five-path protected Script Center launch file and original
+owner-only behavior remain unchanged. A separate owner-created protected
+machine-script-center.json must explicitly request ASK_ONLY V1. Absent this
+file, the launcher passes no new machine flags. It validates the approved
+Executor SHA and the two new machine-secret paths but never creates or
+prints credentials. See MACHINE-POWERSHELL-ASK-OPTIN-V1.md for the exact
+schema and gated single-listener rollout procedure. Source merge alone
+does not activate a machine API.
