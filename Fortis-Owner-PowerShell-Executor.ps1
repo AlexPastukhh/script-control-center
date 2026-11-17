@@ -292,10 +292,26 @@ try {
     if ($currentExecutor.HeadSha -cne $executor.HeadSha) {
         throw 'OWNER_SHELL_SOURCE_CHANGED_DURING_PREFLIGHT'
     }
+    # Optional owner-sealed V1 machine ASK; absent config means owner-only.
+    . (Join-Path $PSScriptRoot 'Get-FortisMachinePowerShellOptIn.ps1')
+    $optinPath = Join-Path $env:LOCALAPPDATA 'Fortis\OwnerShell\machine-script-center.json'
+    $optinArgs = @{
+        ConfigPath = $optinPath
+        ExecutorRoot = $repo
+        ExecutorHeadSha = $currentExecutor.HeadSha
+        OwnerSecretFile = $paths.secretFile
+    }
+    $machineLaunchArgs = Get-FortisMachinePowerShellOptIn @optinArgs
+    if ($machineLaunchArgs.Count -ne 0 -and $machineLaunchArgs.Count -ne 4) {
+        throw 'MACHINE_SHELL_OPTIN_PARTIAL_DENIED'
+    }
+    if ($machineLaunchArgs.Count -eq 4) {
+        Write-Host 'OWNER_SHELL_MACHINE_ASK_OPTIN_PREFLIGHT_PASS'
+    }
     Write-Host 'OWNER_SHELL_SCRIPT_CENTER_PREFLIGHT_PASS'
     Write-Host 'Launching existing Windows Executor on 127.0.0.1:10443.'
     Write-Host 'Authenticated owner scripts run as this Windows user. Ctrl+C stops this instance.'
-    & $launcher -Bind '127.0.0.1' -Port 10443 -ServerCert $paths.serverCert -ServerKey $paths.serverKey -ClientCA $paths.clientCA -SecretFile $paths.secretFile -ReceiptDb $paths.receiptDb
+    & $launcher -Bind '127.0.0.1' -Port 10443 -ServerCert $paths.serverCert -ServerKey $paths.serverKey -ClientCA $paths.clientCA -SecretFile $paths.secretFile -ReceiptDb $paths.receiptDb @machineLaunchArgs
     if (-not $?) { throw 'OWNER_SHELL_EXECUTOR_FAILED' }
 }
 catch {
