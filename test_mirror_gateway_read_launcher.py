@@ -41,6 +41,19 @@ class MirrorGatewayReadLauncherTest(unittest.TestCase):
         for blocked in ("git pull", "git fetch"):
             self.assertNotIn(blocked, source)
 
+    def test_status_fails_closed_for_tcp_enumeration_false_negative(self):
+        """A Docker-reachable listener may be absent from Get-NetTCPConnection."""
+        source = (ROOT / "Fortis-Mirror-Gateway-Read.ps1").read_text("utf-8-sig")
+        self.assertIn("Get-NetTCPConnection -LocalPort 443 -State Listen", source)
+        self.assertIn(".Count -gt 0 -or", source)
+        self.assertIn("(Test-MirrorPort443Loopback))", source)
+        self.assertIn("$socket.ConnectAsync([Net.IPAddress]::Loopback, 443)", source)
+        self.assertIn("$connect.Wait(750) -and $socket.Connected", source)
+        self.assertIn("MIRROR_HTTPS_PORT_443=NOT_CONFIRMED", source)
+        self.assertNotIn("MIRROR_HTTPS_PORT_443=AVAILABLE", source)
+        self.assertIn("MIRROR_HTTPS_LIVE_HEALTH=NOT_TESTED", source)
+        self.assertNotIn("Invoke-WebRequest", source)
+
     def test_paths_only_first_setup_and_manual_catalog(self):
         data = (ROOT / "TEXT-IMPORT-MIRROR-GATEWAY-READ.txt").read_text("utf-8-sig")
         lines = [x.strip() for x in data.splitlines()

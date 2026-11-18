@@ -169,6 +169,17 @@ function Save-OwnerSetup {
     }
 }
 
+function Test-MirrorPort443Loopback {
+    # Windows TCP enumeration can miss an active Docker-reachable listener.
+    # This is a TCP-only occupancy hint, NOT a TLS/auth/live-health check.
+    $socket = [Net.Sockets.TcpClient]::new([Net.Sockets.AddressFamily]::InterNetwork)
+    try {
+        $connect = $socket.ConnectAsync([Net.IPAddress]::Loopback, 443)
+        try { return [bool]($connect.Wait(750) -and $socket.Connected) }
+        catch { return $false }
+    } finally { $socket.Dispose() }
+}
+
 try {
     if ($env:OS -cne 'Windows_NT') { throw 'MIRROR_WINDOWS_REQUIRED' }
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -203,13 +214,15 @@ try {
     $cert = Assert-LocalFile $settings.serverCert 'serverCert' $false
     $key = Assert-LocalFile $settings.serverKey 'serverKey' $true
     $secret = Assert-LocalFile $settings.secretFile 'secretFile' $true
-    if (@(Get-NetTCPConnection -LocalPort 443 -State Listen -ErrorAction SilentlyContinue).Count) {
+    if (@(Get-NetTCPConnection -LocalPort 443 -State Listen -ErrorAction SilentlyContinue).Count -gt 0 -or
+        (Test-MirrorPort443Loopback)) {
         Write-Host 'MIRROR_HTTPS_PORT_443=OCCUPIED_OR_UNKNOWN'
         return
     }
     if ($Status) {
         Write-Host 'MIRROR_HTTPS_SOURCE_AND_PATHS=PASS'
-        Write-Host 'MIRROR_HTTPS_PORT_443=AVAILABLE'
+        # No observation is not proof that the port is free or the API is down.
+        Write-Host 'MIRROR_HTTPS_PORT_443=NOT_CONFIRMED'
         Write-Host 'MIRROR_HTTPS_LIVE_HEALTH=NOT_TESTED'
         return
     }
