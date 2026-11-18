@@ -33,9 +33,17 @@ port 443, verified current source SHA, and fortis-approvals allowlist. Ctrl+C st
 foreground listener. A busy port is UNKNOWN, not proof the correct API runs;
 the adapter refuses to start a second listener. It never calls Browser Pull.
 
-Optional \`-Status\` checks local source, paths and port without starting.
-It does **not** perform TLS, bearer or Gateway-to-Windows live health checks.
-Those belong to UC-GW-012 and the canonical Mirror runbook. This adapter does
-not install services or automatically survive reboot. Any change of configured
-paths requires separate owner review; existing config is never overwritten.
+Optional \`-Status\` checks the accepted local source and protected paths.
+For port 443, both Windows `Get-NetTCPConnection` and a bounded loopback TCP
+connect to `127.0.0.1:443` are best-effort observations: Windows enumeration
+can miss an active Docker-reachable listener. Either observation of occupancy
+reports `MIRROR_HTTPS_PORT_443=OCCUPIED_OR_UNKNOWN`; otherwise it reports
+`MIRROR_HTTPS_PORT_443=NOT_CONFIRMED` — **not** proof that the port is free
+or that Mirror has stopped. The actual listener bind is authoritative for start.
+These checks never submit a Fortis Core request, perform TLS/Bearer verification,
+create credentials, or start the listener. For owner release readiness, verify
+TLS/CA/hostname and a scoped authenticated GET from the actual Gateway
+container with no new Core effect after sealed Check (UC-GW-012 and Mirror
+runbook). This adapter does not install services, automatically survive
+reboot, or overwrite configured paths; path changes need owner review.
 Windows PowerShell 5.1/WinForms/owner ACL live acceptance is still pending.
