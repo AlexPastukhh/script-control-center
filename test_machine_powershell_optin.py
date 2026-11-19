@@ -24,10 +24,11 @@ class MachineOptInSourceTests(unittest.TestCase):
         self.assertIn("machine-script-center.json",helper)
         self.assertIn("Assert-PrivateFile $actual 'machineOptIn' $true",helper)
         self.assertIn("Assert-FortisMachineSecretFiles @guardArgs",helper)
-        self.assertIn("MACHINE_SHELL_OPTIN_EXECUTOR_SHA_CHANGED",helper)
-        self.assertIn("merge-base --is-ancestor",helper)
-        self.assertIn(":(glob,exclude)docs/**/*.md",helper)
-        self.assertIn("--no-renames",helper)
+        self.assertNotIn("MACHINE_SHELL_OPTIN_EXECUTOR_SHA_CHANGED",helper)
+        self.assertNotIn("merge-base --is-ancestor",helper)
+        self.assertNotIn("git.exe",helper)
+        self.assertIn("'executorHeadSha'",helper)  # legacy field tolerated, never bound
+        self.assertIn("Get-FortisPowerShellExecutorWindowsMain -Root $repo",src)
         self.assertIn("MACHINE_SHELL_OPTIN_ASK_ONLY_REQUIRED",helper)
         self.assertIn("'repo-sonar-read-proposal-actor'",helper)
         self.assertIn("'windows-owner'",helper)
@@ -147,7 +148,6 @@ try {
             ({**self.base,"enabled":False},"MACHINE_SHELL_OPTIN_ASK_ONLY_REQUIRED",self.head),
             ({**self.base,"schemaVersion":2},"MACHINE_SHELL_OPTIN_ASK_ONLY_REQUIRED",self.head),
             ({**self.base,"approved":True},"MACHINE_SHELL_OPTIN_SCHEMA_DENIED",self.head),
-            (self.base,"MACHINE_SHELL_OPTIN_EXECUTOR_SHA_CHANGED","f"*40),
             ({**self.base,"machineBearerFile":"relative-path"},"MACHINE_SHELL_OPTIN_SECRET_PATH_INVALID",self.head),
         ]
         for values,reason,sha in variations:
@@ -166,22 +166,27 @@ try {
         self.assertEqual(0,proc.returncode,proc.stdout+proc.stderr)
         self.assertIn("RESULT:MACHINE_ASK",proc.stdout)
 
-    def test_executable_change_after_doc_update_denied(self):
+    def test_executable_changes_do_not_require_pin_review(self):
         self.write(self.base)
-        self.commit("README.md","harmless docs update\n")
-        self.commit("scripts/Assert-MachineSecretPaths.ps1","# new executable logic\n")
+        guard=self.executor/"scripts"/"Assert-MachineSecretPaths.ps1"
+        original=guard.read_text(encoding="utf-8")
+        changed=original.replace(
+            "$MachineBearer -eq $MachineProof",
+            "$MachineBearer -eq $MachineProof -or $MachineBearer -eq 'synthetic-denied'")
+        self.assertNotEqual(original,changed)
+        self.commit("scripts/Assert-MachineSecretPaths.ps1",changed)
         proc=self.probe()
-        self.assertEqual(3,proc.returncode,proc.stdout+proc.stderr)
-        self.assertIn("DENIED:MACHINE_SHELL_OPTIN_EXECUTOR_SHA_CHANGED",proc.stdout)
+        self.assertEqual(0,proc.returncode,proc.stdout+proc.stderr)
+        self.assertIn("RESULT:MACHINE_ASK",proc.stdout)
 
-    def test_non_whitelisted_markdown_denied(self):
+    def test_other_file_changes_do_not_require_pin_review(self):
         self.write(self.base)
-        self.commit("scripts/notes.md","not an exempt documentation path\n")
+        self.commit("AGENTS.md","source instructions changed\n")
         proc=self.probe()
-        self.assertEqual(3,proc.returncode,proc.stdout+proc.stderr)
-        self.assertIn("DENIED:MACHINE_SHELL_OPTIN_EXECUTOR_SHA_CHANGED",proc.stdout)
+        self.assertEqual(0,proc.returncode,proc.stdout+proc.stderr)
+        self.assertIn("RESULT:MACHINE_ASK",proc.stdout)
 
-    def test_non_ancestor_documentation_pin_denied(self):
+    def test_non_ancestor_legacy_pin_ignored(self):
         self.git("checkout","-b","alternate")
         self.commit("README.md","alternate branch docs\n")
         self.base["executorHeadSha"]=self.git("rev-parse","HEAD")
@@ -189,8 +194,22 @@ try {
         self.commit("README.md","main branch docs\n")
         self.write(self.base)
         proc=self.probe()
-        self.assertEqual(3,proc.returncode,proc.stdout+proc.stderr)
-        self.assertIn("DENIED:MACHINE_SHELL_OPTIN_EXECUTOR_SHA_CHANGED",proc.stdout)
+        self.assertEqual(0,proc.returncode,proc.stdout+proc.stderr)
+        self.assertIn("RESULT:MACHINE_ASK",proc.stdout)
+
+    def test_invalid_legacy_pin_and_head_ignored(self):
+        self.base["executorHeadSha"]="not a SHA"
+        self.write(self.base)
+        proc=self.probe("f"*40)
+        self.assertEqual(0,proc.returncode,proc.stdout+proc.stderr)
+        self.assertIn("RESULT:MACHINE_ASK",proc.stdout)
+
+    def test_new_five_key_schema_without_sha_pin(self):
+        self.base.pop("executorHeadSha")
+        self.write(self.base)
+        proc=self.probe("f"*40)
+        self.assertEqual(0,proc.returncode,proc.stdout+proc.stderr)
+        self.assertIn("RESULT:MACHINE_ASK",proc.stdout)
 
     def test_malformed_json_denied(self):
         self.path.write_text("{bad-json",encoding="utf-8")
