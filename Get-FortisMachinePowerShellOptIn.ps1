@@ -11,6 +11,7 @@ function Get-FortisMachinePowerShellOptIn {
     param(
         [Parameter(Mandatory=$true)][string]$ConfigPath,
         [Parameter(Mandatory=$true)][string]$ExecutorRoot,
+        # Compatibility with existing launcher callers; not a source pin.
         [Parameter(Mandatory=$true)][string]$ExecutorHeadSha,
         [Parameter(Mandatory=$true)][string]$OwnerSecretFile
     )
@@ -33,12 +34,19 @@ function Get-FortisMachinePowerShellOptIn {
     } catch {
         throw 'MACHINE_SHELL_OPTIN_CONFIG_JSON_DENIED'
     }
-    $names = @('schemaVersion','enabled','mode','executorHeadSha',
-               'machineBearerFile','machineProofFile')
+    # Backward compatible with the six-key owner-protected JSON. The legacy
+    # executorHeadSha is optional and ignored: the launcher already requires
+    # a clean, synchronized canonical Executor main, regardless of file changes.
+    $required = @('schemaVersion','enabled','mode',
+                  'machineBearerFile','machineProofFile')
+    $allowed = @($required) + @('executorHeadSha')
     if ($null -eq $data -or -not ($data -is [PSCustomObject]) -or
-            @($data.PSObject.Properties.Name).Count -ne $names.Count -or
-            @($names | Where-Object {
+            @($data.PSObject.Properties.Name).Count -notin @(5,6) -or
+            @($required | Where-Object {
                 $data.PSObject.Properties.Name -cnotcontains $_
+            }).Count -ne 0 -or
+            @($data.PSObject.Properties.Name | Where-Object {
+                $allowed -cnotcontains $_
             }).Count -ne 0) {
         throw 'MACHINE_SHELL_OPTIN_SCHEMA_DENIED'
     }
@@ -48,46 +56,6 @@ function Get-FortisMachinePowerShellOptIn {
             $data.enabled -ne $true -or
             $data.mode -cne 'ASK_ONLY') {
         throw 'MACHINE_SHELL_OPTIN_ASK_ONLY_REQUIRED'
-    }
-    if ($data.executorHeadSha -isnot [string] -or
-            $data.executorHeadSha -cnotmatch '^[0-9a-f]{40}$') {
-        throw 'MACHINE_SHELL_OPTIN_EXECUTOR_SHA_CHANGED'
-    }
-    if ($ExecutorHeadSha -cne $data.executorHeadSha) {
-        # A protected machine ASK pin may survive Markdown-only fast-forwards.
-        # No source ref is fetched or changed; the caller already verified
-        # clean HEAD == origin/main in its canonical Windows primary clone.
-        # Only root README.md and Markdown beneath docs/ are exempt.
-        # --no-renames means moving executable code into docs/ is a deletion.
-        $git = (Get-Command git.exe -CommandType Application -ErrorAction Stop |
-            Select-Object -First 1).Source
-        try {
-            $kind = @(& $git -C $ExecutorRoot cat-file -t $data.executorHeadSha 2>&1)
-        } catch {
-            throw 'MACHINE_SHELL_OPTIN_EXECUTOR_SHA_CHANGED'
-        }
-        if ($LASTEXITCODE -ne 0 -or $kind.Count -ne 1 -or
-            [string]$kind[0] -cne 'commit') {
-            throw 'MACHINE_SHELL_OPTIN_EXECUTOR_SHA_CHANGED'
-        }
-        try {
-            $null = @(& $git -C $ExecutorRoot merge-base --is-ancestor $data.executorHeadSha $ExecutorHeadSha 2>&1)
-        } catch {
-            throw 'MACHINE_SHELL_OPTIN_EXECUTOR_SHA_CHANGED'
-        }
-        if ($LASTEXITCODE -ne 0) {
-            throw 'MACHINE_SHELL_OPTIN_EXECUTOR_SHA_CHANGED'
-        }
-        # Git exit 0: every non-documentation blob/mode is identical.
-        # Any other outcome (including a Git error) is a hard STOP.
-        try {
-            & $git -C $ExecutorRoot diff --quiet --no-ext-diff --no-textconv --no-renames $data.executorHeadSha $ExecutorHeadSha -- . ':(exclude)README.md' ':(glob,exclude)docs/**/*.md' *> $null
-        } catch {
-            throw 'MACHINE_SHELL_OPTIN_EXECUTOR_SHA_CHANGED'
-        }
-        if ($LASTEXITCODE -ne 0) {
-            throw 'MACHINE_SHELL_OPTIN_EXECUTOR_SHA_CHANGED'
-        }
     }
     $bearer = [string]$data.machineBearerFile
     $proof = [string]$data.machineProofFile

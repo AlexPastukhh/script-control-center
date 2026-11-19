@@ -8,30 +8,29 @@ The existing Script Center entry Fortis-Owner-PowerShell-Executor.ps1 runs a sin
 
 With NO separate owner-protected machine-script-center.json, Script Center passes no machine flags: current owner-only launch is unchanged.
 
-An owner may later provision the separate protected file at %LOCALAPPDATA%\Fortis\OwnerShell\machine-script-center.json. It contains only the following six keys, never secret contents:
+The owner-protected file %LOCALAPPDATA%\Fortis\OwnerShell\machine-script-center.json has five required keys (and may retain one ignored legacy field), never secret contents:
 
 | JSON key | Exact contract |
 | --- | --- |
 | schemaVersion | integer 1 |
 | enabled | boolean true |
 | mode | string ASK_ONLY, never ALLOW |
-| executorHeadSha | exact SHA of owner-reviewed Executor commit; the pin remains valid across clean synchronized forward commits changing only root README.md or Markdown under docs/ |
+| executorHeadSha (optional legacy) | Ignored by the current launcher; the existing protected file need not be edited or migrated |
 | machineBearerFile | absolute path to protected machine-bearer file, direct child of OwnerShell |
 | machineProofFile | absolute path to distinct proof-key file, direct child of OwnerShell |
 
-Source fixes the machine actor as repo-sonar-read-proposal-actor and target as windows-owner. The machine, AI and JSON cannot override either. Source is pinned to the specified Executor SHA in the owner config. The
-Script Center launcher first requires a clean, synchronized Windows main.
-When HEAD advances beyond the pinned commit, the launcher verifies that the pin
-is an ancestor and that **all paths except root README.md and Markdown files
-under docs/** have unchanged Git content and file modes. Documentation-only
-fast-forwards retain the same protected opt-in, existing credentials and receipt DB.
-A changed executable, other source/config file, deleted/renamed code path,
-non-ancestor pin or unavailable Git object remains a hard STOP.
-After any such change the owner must independently review the accepted
-Executor source and explicitly update the protected SHA pin using the normal
-owner-controlled configuration procedure; there is no automatic pin rewrite.
-GitHub fetch, Windows clone mutation and machine secret disclosure are forbidden
-in the launcher.
+Source fixes the machine actor as repo-sonar-read-proposal-actor and target
+as windows-owner. The machine, AI and JSON cannot override either. The
+canonical Windows Executor checkout must be clean, on main and synchronized
+with the locally fetched origin/main; the Script Center launcher checks this
+immediately before launching. There is **no second Machine ASK SHA pin or
+content/diff/extension-based gate**, whether the reviewed main changed
+documentation, source or configuration. The optional legacy executorHeadSha
+field is accepted for compatibility and ignored (not rewritten). Owner
+GitHub merges and Windows main sync remain the source change authorization
+boundary. The launcher does not fetch, install, update or start a second
+listener. This does not weaken Machine ASK, authentication, ACL, credential
+or receipt DB checks.
 
 The existing Script Center private-file validator checks the config NTFS owner, inheritance and ACL. The *Executor-owned* Assert-FortisMachineSecretFiles helper checks the two secret-file paths, protected directory, reparse points, ACLs and non-reuse of the old owner secret. Both machine keys must already exist under the protected directory. Failures STOP; there is no silent fallback to ALLOW or regeneration of keys. The new helper only reads *paths*, never key contents.
 
