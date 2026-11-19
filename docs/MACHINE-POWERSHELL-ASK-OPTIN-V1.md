@@ -15,11 +15,23 @@ An owner may later provision the separate protected file at %LOCALAPPDATA%\Forti
 | schemaVersion | integer 1 |
 | enabled | boolean true |
 | mode | string ASK_ONLY, never ALLOW |
-| executorHeadSha | exact SHA of reviewed clean Windows Executor main; currently 3a455fd34c9b442e3480729b377680a895c5399c |
+| executorHeadSha | exact SHA of owner-reviewed Executor commit; the pin remains valid across clean synchronized forward commits changing only root README.md or Markdown under docs/ |
 | machineBearerFile | absolute path to protected machine-bearer file, direct child of OwnerShell |
 | machineProofFile | absolute path to distinct proof-key file, direct child of OwnerShell |
 
-Source fixes the machine actor as repo-sonar-read-proposal-actor and target as windows-owner. The machine, AI and JSON cannot override either. Source is pinned to the specified Executor SHA in the owner config; after a new Executor source merge, the owner must explicitly review and update the pin.
+Source fixes the machine actor as repo-sonar-read-proposal-actor and target as windows-owner. The machine, AI and JSON cannot override either. Source is pinned to the specified Executor SHA in the owner config. The
+Script Center launcher first requires a clean, synchronized Windows main.
+When HEAD advances beyond the pinned commit, the launcher verifies that the pin
+is an ancestor and that **all paths except root README.md and Markdown files
+under docs/** have unchanged Git content and file modes. Documentation-only
+fast-forwards retain the same protected opt-in, existing credentials and receipt DB.
+A changed executable, other source/config file, deleted/renamed code path,
+non-ancestor pin or unavailable Git object remains a hard STOP.
+After any such change the owner must independently review the accepted
+Executor source and explicitly update the protected SHA pin using the normal
+owner-controlled configuration procedure; there is no automatic pin rewrite.
+GitHub fetch, Windows clone mutation and machine secret disclosure are forbidden
+in the launcher.
 
 The existing Script Center private-file validator checks the config NTFS owner, inheritance and ACL. The *Executor-owned* Assert-FortisMachineSecretFiles helper checks the two secret-file paths, protected directory, reparse points, ACLs and non-reuse of the old owner secret. Both machine keys must already exist under the protected directory. Failures STOP; there is no silent fallback to ALLOW or regeneration of keys. The new helper only reads *paths*, never key contents.
 

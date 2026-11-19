@@ -50,9 +50,44 @@ function Get-FortisMachinePowerShellOptIn {
         throw 'MACHINE_SHELL_OPTIN_ASK_ONLY_REQUIRED'
     }
     if ($data.executorHeadSha -isnot [string] -or
-            $data.executorHeadSha -cnotmatch '^[0-9a-f]{40}$' -or
-            $ExecutorHeadSha -cne $data.executorHeadSha) {
+            $data.executorHeadSha -cnotmatch '^[0-9a-f]{40}$') {
         throw 'MACHINE_SHELL_OPTIN_EXECUTOR_SHA_CHANGED'
+    }
+    if ($ExecutorHeadSha -cne $data.executorHeadSha) {
+        # A protected machine ASK pin may survive Markdown-only fast-forwards.
+        # No source ref is fetched or changed; the caller already verified
+        # clean HEAD == origin/main in its canonical Windows primary clone.
+        # Only root README.md and Markdown beneath docs/ are exempt.
+        # --no-renames means moving executable code into docs/ is a deletion.
+        $git = (Get-Command git.exe -CommandType Application -ErrorAction Stop |
+            Select-Object -First 1).Source
+        try {
+            $kind = @(& $git -C $ExecutorRoot cat-file -t $data.executorHeadSha 2>&1)
+        } catch {
+            throw 'MACHINE_SHELL_OPTIN_EXECUTOR_SHA_CHANGED'
+        }
+        if ($LASTEXITCODE -ne 0 -or $kind.Count -ne 1 -or
+            [string]$kind[0] -cne 'commit') {
+            throw 'MACHINE_SHELL_OPTIN_EXECUTOR_SHA_CHANGED'
+        }
+        try {
+            $null = @(& $git -C $ExecutorRoot merge-base --is-ancestor $data.executorHeadSha $ExecutorHeadSha 2>&1)
+        } catch {
+            throw 'MACHINE_SHELL_OPTIN_EXECUTOR_SHA_CHANGED'
+        }
+        if ($LASTEXITCODE -ne 0) {
+            throw 'MACHINE_SHELL_OPTIN_EXECUTOR_SHA_CHANGED'
+        }
+        # Git exit 0: every non-documentation blob/mode is identical.
+        # Any other outcome (including a Git error) is a hard STOP.
+        try {
+            & $git -C $ExecutorRoot diff --quiet --no-ext-diff --no-textconv --no-renames $data.executorHeadSha $ExecutorHeadSha -- . ':(exclude)README.md' ':(glob,exclude)docs/**/*.md' *> $null
+        } catch {
+            throw 'MACHINE_SHELL_OPTIN_EXECUTOR_SHA_CHANGED'
+        }
+        if ($LASTEXITCODE -ne 0) {
+            throw 'MACHINE_SHELL_OPTIN_EXECUTOR_SHA_CHANGED'
+        }
     }
     $bearer = [string]$data.machineBearerFile
     $proof = [string]$data.machineProofFile
