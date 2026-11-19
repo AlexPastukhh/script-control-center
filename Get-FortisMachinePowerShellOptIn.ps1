@@ -70,7 +70,11 @@ function Get-FortisMachinePowerShellOptIn {
             [string]$kind[0] -cne 'commit') {
             throw 'MACHINE_SHELL_OPTIN_EXECUTOR_SHA_CHANGED'
         }
-        $null = @(& $git -C $ExecutorRoot merge-base --is-ancestor $data.executorHeadSha $ExecutorHeadSha 2>&1)
+        try {
+            $null = @(& $git -C $ExecutorRoot merge-base --is-ancestor $data.executorHeadSha $ExecutorHeadSha 2>&1)
+        } catch {
+            throw 'MACHINE_SHELL_OPTIN_EXECUTOR_SHA_CHANGED'
+        }
         if ($LASTEXITCODE -ne 0) {
             throw 'MACHINE_SHELL_OPTIN_EXECUTOR_SHA_CHANGED'
         }
